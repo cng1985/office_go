@@ -12,9 +12,12 @@ test('resizing from the west edge keeps the opposite edge fixed', () => {
 test('layouts place a title and a subtitle or body', () => {
   const title = slideLayout('title', ['a', 'b'])
   assert.equal(title.elements.length, 2)
-  assert.equal(title.elements[1].text, '单击编辑副标题')
+  assert.equal(title.elements[0].text, '点击可添加标题')
+  assert.equal(title.elements[0].align, 'center')
+  assert.equal(title.background, '#ffffff')
+  assert.equal(title.elements[1].text, '点击可添加副标题')
   const content = slideLayout('content', ['a', 'b'])
-  assert.equal(content.elements[1].text, '单击编辑正文')
+  assert.equal(content.elements[1].text, '点击可添加正文')
   assert.equal(slideLayout('blank', ['a', 'b']).elements.length, 0)
 })
 

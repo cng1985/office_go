@@ -164,7 +164,7 @@ func Blank(kind string) ([]byte, error) {
 	case KindExcel:
 		return Canonical(kind, []byte(`{"sheets":[{"name":"工作表1","row_count":50,"col_count":26,"cells":[]}]}`))
 	case KindPPT:
-		return Canonical(kind, []byte(`{"slides":[{"id":"s1","background":"#fffdf8","elements":[{"id":"e1","kind":"text","x":72,"y":168,"w":816,"h":96,"text":"单击编辑标题","font_size":44,"color":"#1c1915","bold":true,"align":"left"},{"id":"e2","kind":"text","x":72,"y":280,"w":760,"h":56,"text":"单击编辑副标题","font_size":22,"color":"#6b6258","bold":false,"align":"left"}]}]}`))
+		return Canonical(kind, []byte(`{"slides":[{"id":"s1","background":"#ffffff","elements":[{"id":"e1","kind":"text","x":68,"y":132,"w":824,"h":92,"text":"点击可添加标题","font_size":40,"color":"#202124","bold":true,"align":"center"},{"id":"e2","kind":"text","x":68,"y":228,"w":824,"h":68,"text":"点击可添加副标题","font_size":22,"color":"#5f6368","bold":false,"align":"center"}]}]}`))
 	default:
 		return nil, apperrors.BadRequest(400, "不支持的文档类型")
 	}
