@@ -5,6 +5,7 @@ import { getDocument, getVersion, restoreVersion, saveDocument, searchVersions }
 import { ApiError } from '../api/http'
 import { formatTime } from '../editors/kinds'
 import { applySaveSnapshot } from '../editors/save'
+import { mergeVersionPage } from '../editors/versions'
 import ExcelEditor from '../components/ExcelEditor.vue'
 import PptEditor from '../components/PptEditor.vue'
 import WordEditor from '../components/WordEditor.vue'
@@ -21,6 +22,8 @@ const pending = ref(false)
 const drawer = ref(true)
 const versions = ref([])
 const versionTotal = ref(0)
+const versionPage = ref(1)
+const versionsDone = ref(false)
 const versionsLoading = ref(false)
 const preview = ref(null)
 
@@ -37,27 +40,31 @@ async function load() {
   await loadVersions()
 }
 
+function applyVersionPage(existing, result, requestedPage) {
+  const merged = mergeVersionPage(existing, result.data, result.total, result.page || requestedPage, result.page_size || 50)
+  versions.value = merged.versions
+  versionTotal.value = merged.total
+  versionPage.value = merged.page
+  versionsDone.value = merged.done
+}
+
 async function loadVersions() {
   versionsLoading.value = true
   try {
     const result = await searchVersions({ document_id: doc.value.id, page: 1, page_size: 50 })
-    versions.value = result.data
-    versionTotal.value = result.total
+    applyVersionPage([], result, 1)
   } finally {
     versionsLoading.value = false
   }
 }
 
 async function loadMoreVersions() {
-  if (versionsLoading.value || versions.value.length >= versionTotal.value) return
+  if (versionsLoading.value || versionsDone.value || versions.value.length >= versionTotal.value) return
   versionsLoading.value = true
+  const page = versionPage.value + 1
   try {
-    const page = Math.floor(versions.value.length / 50) + 1
     const result = await searchVersions({ document_id: doc.value.id, page, page_size: 50 })
-    const seen = new Set(versions.value.map((item) => item.id))
-    const fresh = result.data.filter((item) => !seen.has(item.id))
-    versions.value = versions.value.concat(fresh)
-    versionTotal.value = fresh.length ? result.total : versions.value.length
+    applyVersionPage(versions.value, result, page)
   } catch (err) {
     error.value = err.message
   } finally {
@@ -207,7 +214,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <div class="muted">{{ formatTime(item.created_at) }} · {{ item.byte_size }} 字节</div>
         </button>
         <button
-          v-if="versions.length < versionTotal"
+          v-if="!versionsDone && versions.length < versionTotal"
           type="button"
           class="ghost"
           data-testid="load-more-versions"
