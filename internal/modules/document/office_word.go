@@ -36,13 +36,10 @@ const wordStyles = officeXMLHeader + `
   <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:rPr><w:i/></w:rPr></w:style>
 </w:styles>`
 
-const wordNumbering = officeXMLHeader + `
-<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+const wordNumberingAbstract = `
   <w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
   <w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
-  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
-  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
-</w:numbering>`
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>`
 
 const wordRootRels = officeXMLHeader + `
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -54,11 +51,16 @@ func exportDocx(canonical []byte) ([]byte, error) {
 	if err := json.Unmarshal(canonical, &content); err != nil {
 		return nil, apperrors.WrapInternal(err)
 	}
+	numIDs := listNumIDs(content.Blocks)
+	maxNumID := 2
 	var body strings.Builder
 	body.WriteString(officeXMLHeader)
 	body.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
-	for _, block := range content.Blocks {
-		writeWordParagraph(&body, block)
+	for i, block := range content.Blocks {
+		if numIDs[i] > maxNumID {
+			maxNumID = numIDs[i]
+		}
+		writeWordParagraph(&body, block, numIDs[i])
 	}
 	body.WriteString(`</w:body></w:document>`)
 	return packZip(map[string]string{
@@ -67,20 +69,54 @@ func exportDocx(canonical []byte) ([]byte, error) {
 		"word/document.xml":            body.String(),
 		"word/_rels/document.xml.rels": wordDocumentRels,
 		"word/styles.xml":              wordStyles,
-		"word/numbering.xml":           wordNumbering,
+		"word/numbering.xml":           wordNumberingXML(maxNumID),
 	})
 }
 
-func writeWordParagraph(body *strings.Builder, block wordBlock) {
+func listNumIDs(blocks []wordBlock) []int {
+	ids := make([]int, len(blocks))
+	next := 2
+	current := 0
+	for i, block := range blocks {
+		switch block.Type {
+		case "bullet":
+			ids[i] = 1
+			current = 0
+		case "numbered":
+			if current == 0 {
+				current = next
+				next++
+			}
+			ids[i] = current
+		default:
+			current = 0
+		}
+	}
+	return ids
+}
+
+func wordNumberingXML(maxNumID int) string {
+	if maxNumID < 2 {
+		maxNumID = 2
+	}
+	var body strings.Builder
+	body.WriteString(officeXMLHeader)
+	body.WriteString(`<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`)
+	body.WriteString(wordNumberingAbstract)
+	for id := 2; id <= maxNumID; id++ {
+		fmt.Fprintf(&body, `<w:num w:numId="%d"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride></w:num>`, id)
+	}
+	body.WriteString(`</w:numbering>`)
+	return body.String()
+}
+
+func writeWordParagraph(body *strings.Builder, block wordBlock, numID int) {
 	body.WriteString("<w:p><w:pPr>")
 	if style := wordStyleOut(block.Type); style != "" {
 		fmt.Fprintf(body, `<w:pStyle w:val="%s"/>`, style)
 	}
-	switch block.Type {
-	case "bullet":
-		body.WriteString(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>`)
-	case "numbered":
-		body.WriteString(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>`)
+	if numID > 0 {
+		fmt.Fprintf(body, `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="%d"/></w:numPr>`, numID)
 	}
 	fmt.Fprintf(body, `<w:jc w:val="%s"/>`, wordAlignOut(block.Align))
 	if block.Indent > 0 {

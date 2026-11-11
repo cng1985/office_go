@@ -3,6 +3,7 @@ package document
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -30,7 +31,7 @@ func TestOfficeRoundTrip(t *testing.T) {
 			title: "预算",
 			raw: `{"active":1,"sheets":[
 				{"name":"工作表1","row_count":50,"col_count":26,"cells":[
-					{"row":1,"col":1,"input":"你好\n世界","bold":true,"italic":true,"underline":true,"merge_rows":2,"merge_cols":2},
+					{"row":1,"col":1,"input":"你好\n世界","bold":true,"italic":true,"underline":true,"format":"text","merge_rows":2,"merge_cols":2},
 					{"row":2,"col":3,"input":"=SUM(A1)"}
 				]},
 				{"name":"明细","row_count":50,"col_count":26,"cells":[]}
@@ -188,6 +189,9 @@ func TestNumericCellsAndWordStyles(t *testing.T) {
 			t.Fatalf("imported %s missing %s", got, want)
 		}
 	}
+	if bytes.Count(got, []byte(`"format":"text"`)) != 1 {
+		t.Fatalf("text format was not preserved: %s", got)
+	}
 
 	word, err := Canonical(KindWord, []byte(`{"blocks":[
 		{"id":"b1","type":"heading1","align":"left","runs":[{"text":"标题","bold":false,"italic":false,"underline":false}]},
@@ -255,6 +259,137 @@ func TestSharedFormulaImport(t *testing.T) {
 	}
 	if _, _, _, err = ImportFile("坏公式.xlsx", broken); err == nil {
 		t.Fatal("missing shared formula anchor should fail")
+	}
+}
+
+func TestTextNumbersStayText(t *testing.T) {
+	body, err := packZip(map[string]string{
+		"_rels/.rels":                officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+		"xl/workbook.xml":            officeXMLHeader + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="编号" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/sharedStrings.xml":       officeXMLHeader + `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>001</t></si><si><t>10</t></si></sst>`,
+		"xl/worksheets/sheet1.xml": officeXMLHeader + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+			`<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>` +
+			`<row r="2"><c r="A2" t="inlineStr"><is><t>001</t></is></c><c r="A3"><v>10</v></c></row>` +
+			`</sheetData></worksheet>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, content, err := ImportFile("编号.xlsx", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var book excelContent
+	if err := json.Unmarshal(content, &book); err != nil {
+		t.Fatal(err)
+	}
+	if len(book.Sheets) != 1 {
+		t.Fatalf("sheets = %d", len(book.Sheets))
+	}
+	got := map[[2]int]excelCell{}
+	for _, cell := range book.Sheets[0].Cells {
+		got[[2]int{cell.Row, cell.Col}] = cell
+	}
+	checks := []struct {
+		row, col int
+		input    string
+		format   string
+	}{
+		{1, 1, "001", "text"},
+		{1, 2, "10", "text"},
+		{2, 1, "001", "text"},
+		{3, 1, "10", ""},
+	}
+	for _, check := range checks {
+		cell, ok := got[[2]int{check.row, check.col}]
+		if !ok || cell.Input != check.input || cell.Format != check.format {
+			t.Fatalf("cell %d,%d = %+v", check.row, check.col, cell)
+		}
+	}
+	file, err := ExportFile(KindExcel, "编号", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readZip(file.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := string(files["xl/worksheets/sheet1.xml"])
+	for _, want := range []string{
+		`<c r="A1" t="inlineStr"><is><t xml:space="preserve">001</t></is></c>`,
+		`<c r="B1" t="inlineStr"><is><t xml:space="preserve">10</t></is></c>`,
+		`<c r="A2" t="inlineStr"><is><t xml:space="preserve">001</t></is></c>`,
+		`<c r="A3"><v>10</v></c>`,
+	} {
+		if !strings.Contains(sheet, want) {
+			t.Fatalf("sheet missing %s\n%s", want, sheet)
+		}
+	}
+	if strings.Contains(sheet, `<v>1</v>`) {
+		t.Fatalf("leading zero was dropped: %s", sheet)
+	}
+}
+
+func TestWholeRowAndColumnSharedFormulas(t *testing.T) {
+	body, err := packZip(map[string]string{
+		"_rels/.rels":                officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+		"xl/workbook.xml":            officeXMLHeader + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="公式" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml": officeXMLHeader + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+			`<row r="1"><c r="A1"><f t="shared" ref="A1:B2" si="0">SUM(A:A)+SUM(1:1)+SUM($A:$A)+SUM($1:2)</f><v>0</v></c><c r="B1"><f t="shared" si="0"/><v>0</v></c></row>` +
+			`<row r="2"><c r="A2"><f t="shared" si="0"/><v>0</v></c><c r="B2"><f t="shared" si="0"/><v>0</v></c></row>` +
+			`</sheetData></worksheet>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, content, err := ImportFile("整列.xlsx", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"input":"=SUM(A:A)+SUM(1:1)+SUM($A:$A)+SUM($1:2)"`,
+		`"input":"=SUM(B:B)+SUM(1:1)+SUM($A:$A)+SUM($1:2)"`,
+		`"input":"=SUM(A:A)+SUM(2:2)+SUM($A:$A)+SUM($1:3)"`,
+		`"input":"=SUM(B:B)+SUM(2:2)+SUM($A:$A)+SUM($1:3)"`,
+	} {
+		if !bytes.Contains(content, []byte(want)) {
+			t.Fatalf("shared ranges = %s missing %s", content, want)
+		}
+	}
+}
+
+func TestSeparateNumberedListsRestart(t *testing.T) {
+	word, err := Canonical(KindWord, []byte(`{"blocks":[
+		{"id":"b1","type":"numbered","align":"left","runs":[{"text":"甲","bold":false,"italic":false,"underline":false}]},
+		{"id":"b2","type":"bullet","align":"left","runs":[{"text":"点","bold":false,"italic":false,"underline":false}]},
+		{"id":"b3","type":"numbered","align":"left","runs":[{"text":"乙","bold":false,"italic":false,"underline":false}]},
+		{"id":"b4","type":"numbered","align":"left","runs":[{"text":"丙","bold":false,"italic":false,"underline":false}]},
+		{"id":"b5","type":"paragraph","align":"left","runs":[{"text":"间隔","bold":false,"italic":false,"underline":false}]},
+		{"id":"b6","type":"numbered","align":"left","runs":[{"text":"丁","bold":false,"italic":false,"underline":false}]}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ExportFile(KindWord, "清单", word)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := readZip(doc.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documentXML := string(parts["word/document.xml"])
+	if strings.Count(documentXML, `<w:numId w:val="1"/>`) != 1 ||
+		strings.Count(documentXML, `<w:numId w:val="2"/>`) != 1 ||
+		strings.Count(documentXML, `<w:numId w:val="3"/>`) != 2 ||
+		strings.Count(documentXML, `<w:numId w:val="4"/>`) != 1 {
+		t.Fatalf("list instances = %s", documentXML)
+	}
+	numbering := string(parts["word/numbering.xml"])
+	if strings.Count(numbering, `<w:startOverride w:val="1"/>`) != 3 {
+		t.Fatalf("numbering = %s", numbering)
 	}
 }
 
