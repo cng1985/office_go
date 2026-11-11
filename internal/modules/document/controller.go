@@ -27,6 +27,8 @@ func (c *Controller) RegisterProtected(group *gin.RouterGroup) {
 	group.POST("/document/version/search", c.versionSearch)
 	group.POST("/document/version/one", c.versionOne)
 	group.POST("/document/version/restore", c.restore)
+	group.POST("/document/import", c.importFile)
+	group.POST("/document/export", c.exportFile)
 }
 
 func (c *Controller) create(ctx *gin.Context) {
@@ -134,6 +136,34 @@ func (c *Controller) versionOne(ctx *gin.Context) {
 		return
 	}
 	result, err := c.resource.VersionOne(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) importFile(ctx *gin.Context) {
+	var request DocumentImportRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.Import(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) exportFile(ctx *gin.Context) {
+	var request DocumentExportRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.Export(ctx.Request.Context(), &request)
 	if err != nil {
 		response.HandleError(ctx, err)
 		return

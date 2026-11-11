@@ -112,6 +112,24 @@ type DocumentVersionSimple struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// DocumentImportRequest 用文件内容创建一份云端文档。
+type DocumentImportRequest struct {
+	Filename      string `json:"filename"`
+	ContentBase64 string `json:"content_base64"`
+}
+
+// DocumentExportRequest 导出当前版本。
+type DocumentExportRequest struct {
+	ID int64 `json:"id,string"`
+}
+
+// DocumentFile 是可下载的文件。
+type DocumentFile struct {
+	Filename      string `json:"filename"`
+	MediaType     string `json:"media_type"`
+	ContentBase64 string `json:"content_base64"`
+}
+
 // DocumentVersionResponse 是历史版本详情。
 type DocumentVersionResponse struct {
 	ID         int64           `json:"id,string"`
