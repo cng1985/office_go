@@ -206,8 +206,13 @@ function setFont(event) {
   else delete selected.value.font
   touch()
 }
+function setAlign(align) {
+  if (!selected.value || props.readonly) return
+  selected.value.align = align
+  touch()
+}
 function commitSize() {
-  if (!selected.value) return
+  if (!selected.value || props.readonly) return
   selected.value.font_size = clamp(Number(selected.value.font_size) || 12, 12, 96)
   touch()
 }
@@ -619,12 +624,12 @@ onBeforeUnmount(() => {
                   <button type="button" @click="run(() => addSlide('title'))">幻灯片</button>
                 </template>
                 <template v-else-if="name === '格式'">
-                  <button type="button" :disabled="!selected" @click="run(() => flag(selected, 'bold', !selected.bold))">加粗</button>
-                  <button type="button" :disabled="!selected" @click="run(() => flag(selected, 'italic', !selected.italic))">斜体</button>
-                  <button type="button" :disabled="!selected" @click="run(() => flag(selected, 'underline', !selected.underline))">下划线</button>
-                  <button type="button" :disabled="!selected" @click="run(() => { selected.align = 'left'; touch() })">左对齐</button>
-                  <button type="button" :disabled="!selected" @click="run(() => { selected.align = 'center'; touch() })">居中</button>
-                  <button type="button" :disabled="!selected" @click="run(() => { selected.align = 'right'; touch() })">右对齐</button>
+                  <button type="button" :disabled="!selected || readonly" @click="run(() => flag(selected, 'bold', !selected.bold))">加粗</button>
+                  <button type="button" :disabled="!selected || readonly" @click="run(() => flag(selected, 'italic', !selected.italic))">斜体</button>
+                  <button type="button" :disabled="!selected || readonly" @click="run(() => flag(selected, 'underline', !selected.underline))">下划线</button>
+                  <button type="button" :disabled="!selected || readonly" @click="run(() => setAlign('left'))">左对齐</button>
+                  <button type="button" :disabled="!selected || readonly" @click="run(() => setAlign('center'))">居中</button>
+                  <button type="button" :disabled="!selected || readonly" @click="run(() => setAlign('right'))">右对齐</button>
                   <label>字号
                     <input :value="selected?.font_size || 24" :disabled="!selected || readonly" type="number" min="12" max="96" @change="selected.font_size = Number($event.target.value); commitSize()" />
                   </label>

@@ -532,9 +532,10 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .slides-share:disabled { opacity: .6; }
 .slides-avatar { width: 32px; height: 32px; border-radius: 50%; background: #188038; color: #fff; display: grid; place-items: center; font-size: 14px; }
 .share-group .menu-pop, .show-group .menu-pop { left: auto; right: 0; }
-.slides-ribbon { display: flex; align-items: center; gap: 2px; padding: 2px 40px 4px 8px; border-bottom: 1px solid #e0e0e0; min-height: 40px; overflow-x: auto; }
+.slides-ribbon { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 2px 40px 4px 8px; border-bottom: 1px solid #e0e0e0; min-height: 40px; overflow: visible; }
 .slides-ribbon button, .slides-ribbon select { border: 0; background: transparent; color: #3c4043; height: 32px; border-radius: 4px; padding: 0 8px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
 .slides-ribbon button:hover, .slides-ribbon select:hover, .slides-ribbon button.active { background: #f1f3f4; }
+.slides-ribbon .menu-pop { z-index: 12; }
 .slides-ribbon .menu-pop button { display: block; height: auto; width: 100%; background: transparent; }
 .slides-ribbon .menu-pop button:hover { background: #f1f3f4; }
 .slides-ribbon svg { width: 18px; height: 18px; }
