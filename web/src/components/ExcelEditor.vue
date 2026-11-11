@@ -18,9 +18,10 @@ import {
   normalizeWorkbook,
   parseTSV,
   pasteCells,
+  pasteCut,
   pasteValues,
   putCell,
-  removeCell,
+  renameSheetRefs,
   selectionTSV,
   setActive,
   setColumnWidth,
@@ -541,28 +542,25 @@ function onPaste(event) {
 
 function pasteInternal() {
   const clip = localClip.value
-  pasteCells(sheet.value, focusCell.value.row, focusCell.value.col, clip.matrix)
-  if (!clip.cut) return
-  const origin = props.modelValue.sheets[clip.sheet]
-  if (origin) {
-    clip.matrix.forEach((line) => line.forEach((cell) => {
-      if (cell) removeCell(origin, cell.row, cell.col)
-    }))
+  if (clip.cut) {
+    pasteCut(props.modelValue.sheets[clip.sheet], sheet.value, focusCell.value.row, focusCell.value.col, clip.matrix)
+    localClip.value = null
+    return
   }
-  localClip.value = null
+  pasteCells(sheet.value, focusCell.value.row, focusCell.value.col, clip.matrix)
 }
 
 function insertRow() {
   if (props.readonly) return
   checkpoint()
-  if (insertRows(sheet.value, focusCell.value.row, 1)) emitUpdate()
+  if (insertRows(sheet.value, focusCell.value.row, 1, props.modelValue)) emitUpdate()
   else undoStack.pop()
 }
 
 function removeRow() {
   if (props.readonly || sheet.value.row_count <= 1) return
   checkpoint()
-  deleteRows(sheet.value, focusCell.value.row, 1)
+  deleteRows(sheet.value, focusCell.value.row, 1, props.modelValue)
   focusCell.value = { row: Math.min(focusCell.value.row, sheet.value.row_count), col: focusCell.value.col }
   anchor.value = { ...focusCell.value }
   emitUpdate()
@@ -571,14 +569,14 @@ function removeRow() {
 function insertCol() {
   if (props.readonly) return
   checkpoint()
-  if (insertCols(sheet.value, focusCell.value.col, 1)) emitUpdate()
+  if (insertCols(sheet.value, focusCell.value.col, 1, props.modelValue)) emitUpdate()
   else undoStack.pop()
 }
 
 function removeCol() {
   if (props.readonly || sheet.value.col_count <= 1) return
   checkpoint()
-  deleteCols(sheet.value, focusCell.value.col, 1)
+  deleteCols(sheet.value, focusCell.value.col, 1, props.modelValue)
   focusCell.value = { row: focusCell.value.row, col: Math.min(focusCell.value.col, sheet.value.col_count) }
   anchor.value = { ...focusCell.value }
   emitUpdate()
@@ -651,8 +649,10 @@ function finishRename() {
   if (!renaming.value) return
   const used = new Set(sheets.value.filter((_, index) => index !== active.value).map((item) => item.name.toLowerCase()))
   const name = uniqueSheetName(renameText.value, used)
-  if (name && name !== sheet.value.name) {
+  const oldName = sheet.value.name
+  if (name && name !== oldName) {
     checkpoint()
+    renameSheetRefs(props.modelValue, oldName, name)
     sheet.value.name = name
     emitUpdate()
   }

@@ -57,6 +57,12 @@ export function mapFormulaRefs(input, mapper) {
       out += source.slice(start, i)
       continue
     }
+    const sheetToken = consumeSheetToken(source, i)
+    if (sheetToken) {
+      out += sheetToken.raw
+      i = sheetToken.end
+      continue
+    }
     const prev = source[i - 1] || ''
     const matched = /^(\$?)([A-Za-z]{1,3})(\$?)([1-9][0-9]*)/.exec(source.slice(i))
     const ref = matched && !/[A-Za-z0-9_]/.test(prev) ? parseRef(matched[0]) : null
@@ -123,6 +129,79 @@ export function formatNumber(value) {
   if (!Number.isFinite(value)) return '#VALUE!'
   const rounded = Math.round(value * 1e10) / 1e10
   return String(rounded)
+}
+
+export function formatSheetRef(name) {
+  if (/^[A-Za-z][A-Za-z0-9_.]*$/.test(name)) return `${name}!`
+  return `'${String(name).replace(/'/g, "''")}'!`
+}
+
+export function replaceSheetNames(input, oldName, newName) {
+  const source = String(input || '')
+  if (!source.startsWith('=')) return source
+  const from = String(oldName || '').toLowerCase()
+  let out = '='
+  let i = 1
+  while (i < source.length) {
+    if (source[i] === '"') {
+      const start = i
+      i = endOfString(source, i)
+      out += source.slice(start, i)
+      continue
+    }
+    const token = consumeSheetToken(source, i)
+    if (token) {
+      out += token.name.toLowerCase() === from ? formatSheetRef(newName) : token.raw
+      i = token.end
+      continue
+    }
+    out += source[i]
+    i += 1
+  }
+  return out
+}
+
+function consumeSheetToken(source, index) {
+  if (source[index] === "'") {
+    let i = index + 1
+    let name = ''
+    while (i < source.length) {
+      if (source[i] === "'") {
+        if (source[i + 1] === "'") {
+          name += "'"
+          i += 2
+          continue
+        }
+        i += 1
+        break
+      }
+      name += source[i]
+      i += 1
+    }
+    if (source[i] !== '!') return null
+    return { name, end: i + 1, raw: source.slice(index, i + 1) }
+  }
+  const prev = source[index - 1] || ''
+  if (/[A-Za-z0-9_]/.test(prev)) return null
+  const matched = /^[A-Za-z][A-Za-z0-9_.]*(?=!)/.exec(source.slice(index))
+  if (!matched) return null
+  return { name: matched[0], end: index + matched[0].length + 1, raw: `${matched[0]}!` }
+}
+
+function endOfString(source, index) {
+  let i = index + 1
+  while (i < source.length) {
+    if (source[i] === '"') {
+      i += 1
+      if (source[i] === '"') {
+        i += 1
+        continue
+      }
+      break
+    }
+    i += 1
+  }
+  return i
 }
 
 function sheetPrefix(prefix) {

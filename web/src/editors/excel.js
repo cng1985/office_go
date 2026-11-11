@@ -1,4 +1,4 @@
-import { columnLabel, displayCell, mapFormulaRefs, parseRef } from './formula.js'
+import { columnLabel, displayCell, mapFormulaRefs, parseRef, replaceSheetNames } from './formula.js'
 
 export const MAX_ROWS = 120
 export const MAX_COLS = 30
@@ -77,28 +77,30 @@ export function shiftFormula(input, deltaRow, deltaCol) {
   })
 }
 
-export function insertRows(sheet, at, count = 1) {
+export function insertRows(sheet, at, count = 1, workbook = null) {
   if (sheet.row_count + count > MAX_ROWS) return false
   sheet.row_count += count
   for (const cell of sheet.cells) {
     if (cell.row >= at) cell.row += count
-    cell.input = shiftInserted(cell.input, 'row', at, count, sheet.name)
+    cell.input = shiftStructural(cell.input, 'row', at, count, sheet.name, false, 'insert')
   }
+  syncQualifiedRefs(workbook, sheet, 'row', at, count, 'insert')
   return true
 }
 
-export function deleteRows(sheet, at, count = 1) {
+export function deleteRows(sheet, at, count = 1, workbook = null) {
   if (sheet.row_count - count < 1) return false
   sheet.cells = sheet.cells.filter((cell) => cell.row < at || cell.row >= at + count)
   for (const cell of sheet.cells) {
     if (cell.row >= at + count) cell.row -= count
-    cell.input = shiftDeleted(cell.input, 'row', at, count, sheet.name)
+    cell.input = shiftStructural(cell.input, 'row', at, count, sheet.name, false, 'delete')
   }
   sheet.row_count -= count
+  syncQualifiedRefs(workbook, sheet, 'row', at, count, 'delete')
   return true
 }
 
-export function insertCols(sheet, at, count = 1) {
+export function insertCols(sheet, at, count = 1, workbook = null) {
   if (sheet.col_count + count > MAX_COLS) return false
   if (Array.isArray(sheet.col_widths) && sheet.col_widths.length) {
     const widths = sheet.col_widths.slice()
@@ -109,12 +111,13 @@ export function insertCols(sheet, at, count = 1) {
   sheet.col_count += count
   for (const cell of sheet.cells) {
     if (cell.col >= at) cell.col += count
-    cell.input = shiftInserted(cell.input, 'col', at, count, sheet.name)
+    cell.input = shiftStructural(cell.input, 'col', at, count, sheet.name, false, 'insert')
   }
+  syncQualifiedRefs(workbook, sheet, 'col', at, count, 'insert')
   return true
 }
 
-export function deleteCols(sheet, at, count = 1) {
+export function deleteCols(sheet, at, count = 1, workbook = null) {
   if (sheet.col_count - count < 1) return false
   if (Array.isArray(sheet.col_widths) && sheet.col_widths.length) {
     const widths = sheet.col_widths.slice()
@@ -125,15 +128,19 @@ export function deleteCols(sheet, at, count = 1) {
   sheet.cells = sheet.cells.filter((cell) => cell.col < at || cell.col >= at + count)
   for (const cell of sheet.cells) {
     if (cell.col >= at + count) cell.col -= count
-    cell.input = shiftDeleted(cell.input, 'col', at, count, sheet.name)
+    cell.input = shiftStructural(cell.input, 'col', at, count, sheet.name, false, 'delete')
   }
   sheet.col_count -= count
+  syncQualifiedRefs(workbook, sheet, 'col', at, count, 'delete')
   return true
 }
 
 export function growSheet(sheet, rows, cols) {
-  sheet.row_count = Math.min(MAX_ROWS, sheet.row_count + rows)
-  sheet.col_count = Math.min(MAX_COLS, sheet.col_count + cols)
+  const nextRows = Math.min(MAX_ROWS, sheet.row_count + rows)
+  const nextCols = Math.min(MAX_COLS, sheet.col_count + cols)
+  extendWidths(sheet, nextCols)
+  sheet.row_count = nextRows
+  sheet.col_count = nextCols
 }
 
 export function setColumnWidth(sheet, col, width) {
@@ -180,9 +187,7 @@ export function pasteValues(sheet, row, col, matrix) {
     line.forEach((value, dc) => {
       const destRow = row + dr
       const destCol = col + dc
-      if (destRow > MAX_ROWS || destCol > MAX_COLS) return
-      sheet.row_count = Math.max(sheet.row_count, destRow)
-      sheet.col_count = Math.max(sheet.col_count, destCol)
+      if (!ensureGrid(sheet, destRow, destCol)) return
       writeInput(sheet, destRow, destCol, value)
     })
   })
@@ -193,9 +198,7 @@ export function pasteCells(sheet, row, col, matrix) {
     line.forEach((cell, dc) => {
       const destRow = row + dr
       const destCol = col + dc
-      if (destRow > MAX_ROWS || destCol > MAX_COLS) return
-      sheet.row_count = Math.max(sheet.row_count, destRow)
-      sheet.col_count = Math.max(sheet.col_count, destCol)
+      if (!ensureGrid(sheet, destRow, destCol)) return
       if (!cell) {
         const existing = findCell(sheet, destRow, destCol)
         if (existing) putCell(sheet, { ...existing, input: '' })
@@ -224,7 +227,14 @@ export function sortRows(sheet, range, col, direction, workbook) {
   rows.sort((a, b) => compareShown(a.shown, b.shown) * (direction === 'desc' ? -1 : 1))
   sheet.cells = sheet.cells.filter((cell) => cell.row < range.r1 || cell.row > range.r2 || cell.col < range.c1 || cell.col > range.c2)
   rows.forEach((row, index) => {
-    for (const cell of row.cells) sheet.cells.push({ ...cell, row: range.r1 + index })
+    const destRow = range.r1 + index
+    for (const cell of row.cells) {
+      sheet.cells.push({
+        ...cell,
+        row: destRow,
+        input: shiftFormula(cell.input, destRow - cell.row, 0),
+      })
+    }
   })
   sheet.cells.sort((a, b) => a.row - b.row || a.col - b.col)
 }
@@ -238,6 +248,22 @@ export function usedBounds(sheet) {
     c2 = Math.max(c2, cell.col)
   }
   return { r1: 1, c1: 1, r2, c2 }
+}
+
+export function pasteCut(origin, dest, row, col, matrix) {
+  for (const line of matrix || []) {
+    for (const cell of line || []) {
+      if (cell && origin) removeCell(origin, cell.row, cell.col)
+    }
+  }
+  pasteCells(dest, row, col, matrix)
+}
+
+export function renameSheetRefs(workbook, oldName, newName) {
+  if (!oldName || oldName === newName) return
+  for (const item of workbook?.sheets || []) {
+    for (const cell of item.cells || []) cell.input = replaceSheetNames(cell.input, oldName, newName)
+  }
 }
 
 export function setActive(workbook, index) {
@@ -334,19 +360,44 @@ function isColor(value) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || ''))
 }
 
-function shiftInserted(input, axis, at, count, sheetName) {
-  return mapFormulaRefs(input, (ref, ctx) => {
-    if (ctx.sheet && ctx.sheet.toLowerCase() !== String(sheetName || '').toLowerCase()) return ref
-    if (ref[axis] < at) return ref
-    const next = { ...ref, [axis]: ref[axis] + count }
-    if (next.row > MAX_ROWS || next.col > MAX_COLS) return null
-    return next
-  })
+function ensureGrid(sheet, row, col) {
+  if (row > MAX_ROWS || col > MAX_COLS || row < 1 || col < 1) return false
+  if (row > sheet.row_count) sheet.row_count = row
+  if (col > sheet.col_count) {
+    extendWidths(sheet, col)
+    sheet.col_count = col
+  }
+  return true
 }
 
-function shiftDeleted(input, axis, at, count, sheetName) {
+function extendWidths(sheet, cols) {
+  if (!Array.isArray(sheet.col_widths) || !sheet.col_widths.length) return
+  while (sheet.col_widths.length < cols) sheet.col_widths.push(0)
+}
+
+function syncQualifiedRefs(workbook, sheet, axis, at, count, mode) {
+  if (!workbook?.sheets) return
+  for (const other of workbook.sheets) {
+    if (other === sheet) continue
+    for (const cell of other.cells || []) {
+      cell.input = shiftStructural(cell.input, axis, at, count, sheet.name, true, mode)
+    }
+  }
+}
+
+function shiftStructural(input, axis, at, count, sheetName, qualifiedOnly, mode) {
+  const name = String(sheetName || '').toLowerCase()
   return mapFormulaRefs(input, (ref, ctx) => {
-    if (ctx.sheet && ctx.sheet.toLowerCase() !== String(sheetName || '').toLowerCase()) return ref
+    const target = String(ctx.sheet || '').toLowerCase()
+    if (qualifiedOnly) {
+      if (!target || target !== name) return ref
+    } else if (target && target !== name) return ref
+    if (mode === 'insert') {
+      if (ref[axis] < at) return ref
+      const next = { ...ref, [axis]: ref[axis] + count }
+      if (next.row > MAX_ROWS || next.col > MAX_COLS) return null
+      return next
+    }
     if (ref[axis] >= at && ref[axis] < at + count) return null
     if (ref[axis] >= at + count) return { ...ref, [axis]: ref[axis] - count }
     return ref

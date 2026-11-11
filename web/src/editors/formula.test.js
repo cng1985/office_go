@@ -74,4 +74,5 @@ test('excel functions, absolute refs and columns past Z', () => {
   assert.equal(columnLabel(27), 'AA')
   assert.deepEqual(parseRef('$B$12'), { col: 2, row: 12, absCol: true, absRow: true })
   assert.equal(mapFormulaRefs('=A1+B$2', (ref) => ({ ...ref, row: ref.absRow ? ref.row : ref.row + 1, col: ref.absCol ? ref.col : ref.col + 1 })), '=B2+C$2')
+  assert.equal(mapFormulaRefs("='Q1'!A1", (ref) => ({ ...ref, row: ref.row + 1 })), "='Q1'!A2")
 })
