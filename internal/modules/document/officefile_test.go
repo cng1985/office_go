@@ -151,6 +151,113 @@ func TestImportExportThroughResource(t *testing.T) {
 	}
 }
 
+func TestNumericCellsAndWordStyles(t *testing.T) {
+	canonical, err := Canonical(KindExcel, []byte(`{"sheets":[{"name":"工作表1","row_count":50,"col_count":26,"cells":[
+		{"row":1,"col":1,"input":"10"},
+		{"row":2,"col":1,"input":"20"},
+		{"row":3,"col":1,"input":"=SUM(A1:A2)"},
+		{"row":4,"col":1,"input":"001","format":"text"},
+		{"row":5,"col":1,"input":"001"}
+	]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := ExportFile(KindExcel, "合计", canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readZip(file.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := string(files["xl/worksheets/sheet1.xml"])
+	for _, want := range []string{`<c r="A1"><v>10</v></c>`, `<c r="A2"><v>20</v></c>`, `<f>SUM(A1:A2)</f>`, `>001</t>`} {
+		if !strings.Contains(sheet, want) {
+			t.Fatalf("sheet missing %s\n%s", want, sheet)
+		}
+	}
+	if strings.Contains(sheet, `r="A1" t="inlineStr"`) || !strings.Contains(sheet, `<c r="A5"><v>1</v></c>`) {
+		t.Fatalf("numeric cells = %s", sheet)
+	}
+	_, _, got, err := ImportFile(file.Filename, file.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"input":"10"`, `"input":"20"`, `"input":"=SUM(A1:A2)"`, `"input":"001"`, `"input":"1"`} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Fatalf("imported %s missing %s", got, want)
+		}
+	}
+
+	word, err := Canonical(KindWord, []byte(`{"blocks":[
+		{"id":"b1","type":"heading1","align":"left","runs":[{"text":"标题","bold":false,"italic":false,"underline":false}]},
+		{"id":"b2","type":"bullet","align":"left","runs":[{"text":"要点","bold":false,"italic":false,"underline":false}]},
+		{"id":"b3","type":"numbered","align":"left","runs":[{"text":"步骤","bold":false,"italic":false,"underline":false}]}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ExportFile(KindWord, "纪要", word)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := readZip(doc.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(parts["word/styles.xml"], []byte(`w:styleId="Heading1"`)) || !bytes.Contains(parts["word/styles.xml"], []byte(`w:styleId="ListBullet"`)) {
+		t.Fatal("missing paragraph styles")
+	}
+	if !bytes.Contains(parts["word/numbering.xml"], []byte(`w:numFmt w:val="bullet"`)) || !bytes.Contains(parts["word/numbering.xml"], []byte(`w:numFmt w:val="decimal"`)) {
+		t.Fatal("missing list numbering")
+	}
+	if !bytes.Contains(parts["word/_rels/document.xml.rels"], []byte("numbering.xml")) || !bytes.Contains(parts["word/_rels/document.xml.rels"], []byte("styles.xml")) {
+		t.Fatal("document relationships do not include styles")
+	}
+	documentXML := string(parts["word/document.xml"])
+	if !strings.Contains(documentXML, `<w:numId w:val="1"/>`) || !strings.Contains(documentXML, `<w:numId w:val="2"/>`) {
+		t.Fatalf("paragraph numbering = %s", documentXML)
+	}
+}
+
+func TestSharedFormulaImport(t *testing.T) {
+	body, err := packZip(map[string]string{
+		"_rels/.rels":                officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+		"xl/workbook.xml":            officeXMLHeader + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="公式" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml": officeXMLHeader + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+			`<row r="3"><c r="A3"><f t="shared" si="0"/><v>99</v></c><c r="C3"><f t="shared" si="1"/><v>5</v></c></row>` +
+			`<row r="2"><c r="A2"><f t="shared" ref="A2:A3" si="0">A1+1</f><v>2</v></c><c r="B2"><f t="shared" ref="B2:C3" si="1">$A2+B1</f><v>4</v></c></row>` +
+			`</sheetData></worksheet>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, content, err := ImportFile("公式.xlsx", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"input":"=A1+1"`, `"input":"=A2+1"`, `"input":"=$A2+B1"`, `"input":"=$A3+C2"`} {
+		if !bytes.Contains(content, []byte(want)) {
+			t.Fatalf("shared formulas = %s missing %s", content, want)
+		}
+	}
+	if bytes.Contains(content, []byte(`"99"`)) || bytes.Contains(content, []byte(`"input":"5"`)) {
+		t.Fatalf("cached shared values leaked: %s", content)
+	}
+	broken, err := packZip(map[string]string{
+		"xl/workbook.xml":            officeXMLHeader + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="公式" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   officeXMLHeader + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="shared" si="4"/><v>1</v></c></row></sheetData></worksheet>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = ImportFile("坏公式.xlsx", broken); err == nil {
+		t.Fatal("missing shared formula anchor should fail")
+	}
+}
+
 func extOf(kind string) string {
 	switch kind {
 	case KindWord:
