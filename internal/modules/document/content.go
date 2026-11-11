@@ -38,17 +38,33 @@ type wordRun struct {
 }
 
 type excelContent struct {
-	SheetName string      `json:"sheet_name"`
+	Active    int          `json:"active,omitempty"`
+	Sheets    []excelSheet `json:"sheets,omitempty"`
+	SheetName string       `json:"sheet_name,omitempty"`
+	RowCount  int          `json:"row_count,omitempty"`
+	ColCount  int          `json:"col_count,omitempty"`
+	Cells     []excelCell  `json:"cells,omitempty"`
+}
+
+type excelSheet struct {
+	Name      string      `json:"name"`
 	RowCount  int         `json:"row_count"`
 	ColCount  int         `json:"col_count"`
+	ColWidths []int       `json:"col_widths,omitempty"`
 	Cells     []excelCell `json:"cells"`
 }
 
 type excelCell struct {
-	Row   int    `json:"row"`
-	Col   int    `json:"col"`
-	Input string `json:"input"`
-	Bold  bool   `json:"bold"`
+	Row       int    `json:"row"`
+	Col       int    `json:"col"`
+	Input     string `json:"input"`
+	Bold      bool   `json:"bold,omitempty"`
+	Italic    bool   `json:"italic,omitempty"`
+	Underline bool   `json:"underline,omitempty"`
+	Align     string `json:"align,omitempty"`
+	Color     string `json:"color,omitempty"`
+	Fill      string `json:"fill,omitempty"`
+	Format    string `json:"format,omitempty"`
 }
 
 type pptContent struct {
@@ -122,7 +138,7 @@ func Blank(kind string) ([]byte, error) {
 	case KindWord:
 		return Canonical(kind, []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"","bold":false,"italic":false,"underline":false}]}]}`))
 	case KindExcel:
-		return Canonical(kind, []byte(`{"sheet_name":"Sheet1","row_count":30,"col_count":12,"cells":[]}`))
+		return Canonical(kind, []byte(`{"sheets":[{"name":"Sheet1","row_count":40,"col_count":16,"cells":[]}]}`))
 	case KindPPT:
 		return Canonical(kind, []byte(`{"slides":[{"id":"s1","background":"#fffdf8","elements":[{"id":"e1","kind":"text","x":72,"y":78,"w":760,"h":92,"text":"单击编辑标题","font_size":40,"color":"#1c1915","bold":true,"align":"left"}]}]}`))
 	default:
@@ -230,23 +246,66 @@ func normalizeRuns(runs []wordRun) []wordRun {
 }
 
 func validateExcel(content *excelContent) error {
-	content.SheetName = trimSpace(content.SheetName)
-	if content.SheetName == "" || utf8.RuneCountInString(content.SheetName) > 31 || hasControl(content.SheetName, false) {
+	if len(content.Sheets) == 0 {
+		if content.SheetName == "" && content.RowCount == 0 && content.ColCount == 0 && len(content.Cells) == 0 {
+			return apperrors.BadRequest(400, "表格内容无效")
+		}
+		content.Sheets = []excelSheet{{
+			Name:     content.SheetName,
+			RowCount: content.RowCount,
+			ColCount: content.ColCount,
+			Cells:    content.Cells,
+		}}
+		content.Active = 0
+	}
+	if len(content.Sheets) > 20 {
+		return apperrors.BadRequest(400, "工作表数量无效")
+	}
+	if content.Active < 0 || content.Active >= len(content.Sheets) {
+		return apperrors.BadRequest(400, "当前工作表无效")
+	}
+	names := map[string]struct{}{}
+	for i := range content.Sheets {
+		if err := validateSheet(&content.Sheets[i], names); err != nil {
+			return err
+		}
+	}
+	content.SheetName = ""
+	content.RowCount = 0
+	content.ColCount = 0
+	content.Cells = nil
+	return nil
+}
+
+func validateSheet(sheet *excelSheet, names map[string]struct{}) error {
+	sheet.Name = trimSpace(sheet.Name)
+	if sheet.Name == "" || utf8.RuneCountInString(sheet.Name) > 31 || hasControl(sheet.Name, false) || strings.ContainsAny(sheet.Name, `:\/?*[]`) {
 		return apperrors.BadRequest(400, "工作表名称无效")
 	}
-	if content.RowCount < 1 || content.RowCount > 100 || content.ColCount < 1 || content.ColCount > 26 {
+	if _, ok := names[strings.ToLower(sheet.Name)]; ok {
+		return apperrors.BadRequest(400, "工作表名称重复")
+	}
+	names[strings.ToLower(sheet.Name)] = struct{}{}
+	if sheet.RowCount < 1 || sheet.RowCount > 120 || sheet.ColCount < 1 || sheet.ColCount > 30 {
 		return apperrors.BadRequest(400, "表格行列范围无效")
 	}
-	if content.Cells == nil {
-		content.Cells = []excelCell{}
+	if err := validateWidths(sheet); err != nil {
+		return err
 	}
-	if len(content.Cells) > content.RowCount*content.ColCount {
-		return apperrors.BadRequest(400, "单元格数量无效")
+	if sheet.Cells == nil {
+		sheet.Cells = []excelCell{}
 	}
+	kept := make([]excelCell, 0, len(sheet.Cells))
 	seen := map[[2]int]struct{}{}
-	for i := range content.Cells {
-		cell := &content.Cells[i]
-		if cell.Row < 1 || cell.Row > content.RowCount || cell.Col < 1 || cell.Col > content.ColCount {
+	for i := range sheet.Cells {
+		cell := sheet.Cells[i]
+		cell.Input = strings.ReplaceAll(strings.ReplaceAll(cell.Input, "\r\n", "\n"), "\r", "\n")
+		cell.Color = strings.ToLower(cell.Color)
+		cell.Fill = strings.ToLower(cell.Fill)
+		if cell.Format == "general" {
+			cell.Format = ""
+		}
+		if cell.Row < 1 || cell.Row > sheet.RowCount || cell.Col < 1 || cell.Col > sheet.ColCount {
 			return apperrors.BadRequest(400, "单元格位置无效")
 		}
 		key := [2]int{cell.Row, cell.Col}
@@ -254,16 +313,61 @@ func validateExcel(content *excelContent) error {
 			return apperrors.BadRequest(400, "单元格重复")
 		}
 		seen[key] = struct{}{}
-		if utf8.RuneCountInString(cell.Input) > 1000 || hasControl(cell.Input, false) {
+		if utf8.RuneCountInString(cell.Input) > 2000 || hasControl(cell.Input, true) {
 			return apperrors.BadRequest(400, "单元格内容过长或包含控制字符")
 		}
-	}
-	sort.Slice(content.Cells, func(i, j int) bool {
-		if content.Cells[i].Row == content.Cells[j].Row {
-			return content.Cells[i].Col < content.Cells[j].Col
+		if cell.Align != "" && cell.Align != "left" && cell.Align != "center" && cell.Align != "right" {
+			return apperrors.BadRequest(400, "单元格对齐无效")
 		}
-		return content.Cells[i].Row < content.Cells[j].Row
+		if cell.Format != "" && cell.Format != "number" && cell.Format != "percent" && cell.Format != "date" && cell.Format != "text" {
+			return apperrors.BadRequest(400, "单元格格式无效")
+		}
+		if cell.Color != "" && !colorPattern.MatchString(cell.Color) {
+			return apperrors.BadRequest(400, "单元格颜色无效")
+		}
+		if cell.Fill != "" && !colorPattern.MatchString(cell.Fill) {
+			return apperrors.BadRequest(400, "单元格填充无效")
+		}
+		if cell.Input == "" && !cell.Bold && !cell.Italic && !cell.Underline && cell.Align == "" && cell.Color == "" && cell.Fill == "" && cell.Format == "" {
+			continue
+		}
+		kept = append(kept, cell)
+	}
+	if len(kept) > sheet.RowCount*sheet.ColCount {
+		return apperrors.BadRequest(400, "单元格数量无效")
+	}
+	sort.Slice(kept, func(i, j int) bool {
+		if kept[i].Row == kept[j].Row {
+			return kept[i].Col < kept[j].Col
+		}
+		return kept[i].Row < kept[j].Row
 	})
+	sheet.Cells = kept
+	return nil
+}
+
+func validateWidths(sheet *excelSheet) error {
+	if len(sheet.ColWidths) == 0 {
+		sheet.ColWidths = nil
+		return nil
+	}
+	if len(sheet.ColWidths) != sheet.ColCount {
+		return apperrors.BadRequest(400, "列宽数量无效")
+	}
+	used := false
+	for i, width := range sheet.ColWidths {
+		if width == 0 {
+			continue
+		}
+		if width < 48 || width > 360 {
+			return apperrors.BadRequest(400, "列宽无效")
+		}
+		sheet.ColWidths[i] = width
+		used = true
+	}
+	if !used {
+		sheet.ColWidths = nil
+	}
 	return nil
 }
 

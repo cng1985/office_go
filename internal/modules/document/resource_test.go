@@ -1,6 +1,7 @@
 package document
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -123,6 +124,30 @@ func TestSaveRollsBackWhenVersionInsertFails(t *testing.T) {
 	}
 	if current.Data.Revision != created.Data.Revision || current.Data.VersionNo != 1 {
 		t.Fatalf("rolled back state = %+v", current.Data)
+	}
+}
+
+func TestExcelCanonicalAcceptsLegacySheet(t *testing.T) {
+	got, err := Canonical(KindExcel, []byte(`{"sheet_name":"预算","row_count":30,"col_count":12,"cells":[{"row":2,"col":1,"input":"=A1","bold":false},{"row":1,"col":1,"input":"100","bold":true}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("sheet_name")) || bytes.Contains(got, []byte(`"bold":false`)) {
+		t.Fatalf("legacy fields leaked: %s", got)
+	}
+	want := `{"sheets":[{"name":"预算","row_count":30,"col_count":12,"cells":[{"row":1,"col":1,"input":"100","bold":true},{"row":2,"col":1,"input":"=A1"}]}]}`
+	if string(got) != want {
+		t.Fatalf("canonical = %s", got)
+	}
+	formatted, err := Canonical(KindExcel, []byte(`{"active":1,"sheets":[{"name":"Sheet1","row_count":40,"col_count":16,"cells":[]},{"name":"明细","row_count":10,"col_count":4,"col_widths":[0,80,0,0],"cells":[{"row":1,"col":1,"input":"你好\n世界","italic":true,"align":"center","color":"#AABBCC","fill":"#112233","format":"text"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(formatted, []byte(`"active":1`)) || !bytes.Contains(formatted, []byte(`你好\n世界`)) || !bytes.Contains(formatted, []byte(`"color":"#aabbcc"`)) {
+		t.Fatalf("formatted = %s", formatted)
+	}
+	if _, err := Canonical(KindExcel, []byte(`{"sheets":[{"name":"Sheet1","row_count":40,"col_count":16,"cells":[{"row":1,"col":1,"input":"1","extra":true}]}]}`)); err == nil {
+		t.Fatal("unknown cell field should fail")
 	}
 }
 
