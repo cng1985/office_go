@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getDocument, getVersion, restoreVersion, saveDocument, searchVersions } from '../api/document'
 import { ApiError } from '../api/http'
 import { formatTime } from '../editors/kinds'
+import { applySaveSnapshot } from '../editors/save'
 import ExcelEditor from '../components/ExcelEditor.vue'
 import PptEditor from '../components/PptEditor.vue'
 import WordEditor from '../components/WordEditor.vue'
@@ -19,6 +20,8 @@ const status = ref('已保存')
 const pending = ref(false)
 const drawer = ref(true)
 const versions = ref([])
+const versionTotal = ref(0)
+const versionsLoading = ref(false)
 const preview = ref(null)
 
 const dirty = computed(() => doc.value && JSON.stringify({ title: doc.value.title, content: draft.value }) !== saved.value)
@@ -35,24 +38,56 @@ async function load() {
 }
 
 async function loadVersions() {
-  const result = await searchVersions({ document_id: doc.value.id, page: 1, page_size: 50 })
-  versions.value = result.data
+  versionsLoading.value = true
+  try {
+    const result = await searchVersions({ document_id: doc.value.id, page: 1, page_size: 50 })
+    versions.value = result.data
+    versionTotal.value = result.total
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+async function loadMoreVersions() {
+  if (versionsLoading.value || versions.value.length >= versionTotal.value) return
+  versionsLoading.value = true
+  try {
+    const page = Math.floor(versions.value.length / 50) + 1
+    const result = await searchVersions({ document_id: doc.value.id, page, page_size: 50 })
+    const seen = new Set(versions.value.map((item) => item.id))
+    const fresh = result.data.filter((item) => !seen.has(item.id))
+    versions.value = versions.value.concat(fresh)
+    versionTotal.value = fresh.length ? result.total : versions.value.length
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+function cloneContent(value) {
+  return JSON.parse(JSON.stringify(value))
 }
 
 async function save() {
   if (!doc.value || pending.value) return
   pending.value = true
   error.value = ''
+  const submitted = {
+    title: doc.value.title,
+    note: note.value,
+    content: cloneContent(draft.value),
+  }
   try {
     const result = await saveDocument({
       id: doc.value.id,
       revision: doc.value.revision,
-      title: doc.value.title,
-      note: note.value,
-      content: draft.value,
+      title: submitted.title,
+      note: submitted.note,
+      content: submitted.content,
     })
-    applySaved(result.data.document, result.data.new_version)
-    note.value = ''
+    applySaved(result.data.document, result.data.new_version, submitted)
+    if (note.value === submitted.note) note.value = ''
   } catch (err) {
     handleConflict(err)
   } finally {
@@ -60,11 +95,22 @@ async function save() {
   }
 }
 
-function applySaved(document, created) {
-  doc.value = document
-  draft.value = structuredClone(document.content)
-  saved.value = JSON.stringify({ title: doc.value.title, content: draft.value })
-  status.value = created ? `已保存为版本 ${document.version_no}` : '内容没有变化'
+function applySaved(document, created, submitted) {
+  const current = { title: doc.value.title, content: draft.value }
+  const next = submitted ? applySaveSnapshot(current, submitted, document) : null
+  if (next?.pendingEdits) {
+    doc.value.revision = document.revision
+    doc.value.version_no = document.version_no
+    doc.value.version_id = document.version_id
+    doc.value.updated_at = document.updated_at
+    saved.value = JSON.stringify({ title: next.savedTitle, content: next.savedContent })
+    status.value = '有未保存的修改'
+  } else {
+    doc.value = document
+    draft.value = cloneContent(document.content)
+    saved.value = JSON.stringify({ title: doc.value.title, content: draft.value })
+    status.value = created ? `已保存为版本 ${document.version_no}` : '内容没有变化'
+  }
   preview.value = null
   loadVersions()
 }
@@ -159,6 +205,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <strong>版本 {{ item.version_no }}</strong>
           <div>{{ item.note || '无说明' }}</div>
           <div class="muted">{{ formatTime(item.created_at) }} · {{ item.byte_size }} 字节</div>
+        </button>
+        <button
+          v-if="versions.length < versionTotal"
+          type="button"
+          class="ghost"
+          data-testid="load-more-versions"
+          :disabled="versionsLoading"
+          @click="loadMoreVersions"
+        >
+          更早的版本（{{ versions.length }}/{{ versionTotal }}）
         </button>
       </aside>
     </div>

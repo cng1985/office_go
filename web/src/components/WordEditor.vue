@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onMounted, ref, watch } from 'vue'
-import { applyMark, newId, plainText, sliceRuns } from '../editors/text'
+import { applyMark, clipboardToLines, mergeRuns, newId, plainText, segmentsFromElement, sliceRuns } from '../editors/text'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -47,31 +47,84 @@ function renderRuns(element, runs) {
   }
 }
 
-function parseRuns(element) {
-  const runs = []
-  const walk = (node, marks) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.nodeValue.replace(/\u00a0/g, ' ')
-      if (text) runs.push({ text, ...marks })
-      return
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE || node.tagName === 'BR') return
-    const style = node.style || {}
-    const next = {
-      bold: marks.bold || style.fontWeight === '700' || style.fontWeight === 'bold' || node.tagName === 'B' || node.tagName === 'STRONG',
-      italic: marks.italic || style.fontStyle === 'italic' || node.tagName === 'I' || node.tagName === 'EM',
-      underline: marks.underline || style.textDecoration.includes('underline') || node.tagName === 'U',
-    }
-    for (const child of node.childNodes) walk(child, next)
-  }
-  for (const child of element.childNodes) walk(child, { bold: false, italic: false, underline: false })
-  if (!runs.length) runs.push({ text: '', bold: false, italic: false, underline: false })
-  return runs
+function emptyRuns() {
+  return [{ text: '', bold: false, italic: false, underline: false }]
 }
 
 function onInput(index, event) {
-  props.modelValue.blocks[index].runs = parseRuns(event.target)
+  const segments = segmentsFromElement(event.target)
+  if (segments.length <= 1) {
+    props.modelValue.blocks[index].runs = segments[0] || emptyRuns()
+    touch()
+    return
+  }
+  replaceWithSegments(index, segments)
+}
+
+function onPaste(index, event) {
+  if (props.readonly) return
+  const lines = clipboardToLines(event.clipboardData?.getData('text/plain'), event.clipboardData?.getData('text/html'))
+  if (lines.length === 1 && lines[0] === '') return
+  event.preventDefault()
+  insertLines(index, lines)
+}
+
+function onBeforeInput(index, event) {
+  if (props.readonly || event.inputType !== 'insertLineBreak') return
+  event.preventDefault()
+  splitBlock(index)
+}
+
+function replaceWithSegments(index, segments, caret = null) {
+  const block = props.modelValue.blocks[index]
+  const room = 400 - props.modelValue.blocks.length + 1
+  const kept = segments.slice(0, Math.max(1, room))
+  if (kept.length < segments.length) {
+    const extra = segments.slice(kept.length).map((runs) => plainText(runs)).filter(Boolean).join(' ')
+    if (extra) {
+      const last = kept[kept.length - 1]
+      last.splice(0, last.length, ...mergeRuns([...last, { text: extra, bold: false, italic: false, underline: false }]))
+    }
+  }
+  block.runs = kept[0]
+  const created = kept.slice(1).map((runs) => ({
+    id: newId(),
+    type: 'paragraph',
+    align: block.align,
+    runs,
+  }))
+  if (created.length) props.modelValue.blocks.splice(index + 1, 0, ...created)
   touch()
+  nextTick(() => paintFrom(index, kept.length, caret))
+}
+
+function insertLines(index, lines) {
+  const element = elements.value[index]
+  const block = props.modelValue.blocks[index]
+  const selected = element ? selectionRange(element) : null
+  const text = plainText(block.runs)
+  const start = selected ? selected.start : text.length
+  const end = selected ? selected.end : text.length
+  const before = sliceRuns(block.runs, 0, start)
+  const after = sliceRuns(block.runs, end, text.length)
+  const first = mergeRuns([...before, { text: lines[0], bold: false, italic: false, underline: false }])
+  if (lines.length === 1) {
+    block.runs = mergeRuns([...first, ...after])
+    touch()
+    nextTick(() => {
+      const current = elements.value[index]
+      if (!current) return
+      renderRuns(current, block.runs)
+      current.dataset.ready = '1'
+      current.focus()
+      const offset = plainText(before).length + lines[0].length
+      restoreSelection(current, offset, offset)
+    })
+    return
+  }
+  const middle = lines.slice(1, -1).map((line) => (line ? [{ text: line, bold: false, italic: false, underline: false }] : emptyRuns()))
+  const last = mergeRuns([{ text: lines[lines.length - 1], bold: false, italic: false, underline: false }, ...after])
+  replaceWithSegments(index, [first.length ? first : emptyRuns(), ...middle, last.length ? last : emptyRuns()], lines[lines.length - 1].length)
 }
 
 function focusBlock(index) {
@@ -181,6 +234,7 @@ function onKey(index, event) {
 }
 
 function splitBlock(index) {
+  if (props.modelValue.blocks.length >= 400) return
   const element = elements.value[index]
   const block = props.modelValue.blocks[index]
   const selected = selectionRange(element)
@@ -196,16 +250,23 @@ function splitBlock(index) {
   }
   props.modelValue.blocks.splice(index + 1, 0, created)
   touch()
-  nextTick(() => {
-    renderRuns(elements.value[index], props.modelValue.blocks[index].runs)
-    const next = elements.value[index + 1]
-    if (next) {
-      renderRuns(next, created.runs)
-      next.dataset.ready = '1'
-      next.focus()
-      active.value = index + 1
-    }
-  })
+  nextTick(() => paintFrom(index, 2))
+}
+
+function paintFrom(index, count, caret = null) {
+  for (let offset = 0; offset < count; offset += 1) {
+    const element = elements.value[index + offset]
+    const block = props.modelValue.blocks[index + offset]
+    if (!element || !block) continue
+    renderRuns(element, block.runs)
+    element.dataset.ready = '1'
+  }
+  const last = elements.value[index + count - 1]
+  if (last) {
+    last.focus()
+    active.value = index + count - 1
+    if (caret != null) restoreSelection(last, caret, caret)
+  }
 }
 
 function mergeBackward(index) {
@@ -270,6 +331,8 @@ watch(() => props.modelValue, refreshAll)
           data-testid="word-block"
           :ref="(element) => setElement(index, element)"
           @focus="focusBlock(index)"
+          @beforeinput="onBeforeInput(index, $event)"
+          @paste="onPaste(index, $event)"
           @input="onInput(index, $event)"
           @keydown="onKey(index, $event)"
         />
