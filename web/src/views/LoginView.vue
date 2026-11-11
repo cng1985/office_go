@@ -29,35 +29,27 @@ async function submit() {
 
 <template>
   <main class="auth-screen">
-    <section class="auth-story">
-      <div>
-        <div class="seal">笺</div>
-        <h1>云笺</h1>
-        <p>把文稿、表格和演示放在同一张书案上。写完即存到云端，每一次保存都留下可以回看的版本。</p>
+    <form class="auth-card" @submit.prevent="submit">
+      <div class="product-marks" aria-hidden="true">
+        <span class="mark word">W</span>
+        <span class="mark excel">
+          <svg viewBox="0 0 24 24"><path d="M5 5h14v14H5z" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M5 10h14M5 15h14M10 5v14M15 5v14" stroke="#fff" stroke-width="1.2"/></svg>
+        </span>
+        <span class="mark ppt">
+          <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="10" rx="1.2" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M9 19h6M12 16v3" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
       </div>
-      <div class="story-points">
-        <span>文稿</span>
-        <span>表格</span>
-        <span>演示</span>
-        <span>版本</span>
-      </div>
-    </section>
-    <section class="auth-panel">
-      <div class="auth-card">
-        <h2>登录</h2>
-        <p class="muted">使用你的云笺账号继续编辑。</p>
-        <form @submit.prevent="submit">
-          <label>用户名
-            <input data-testid="login-username" v-model="username" autocomplete="username" />
-          </label>
-          <label>密码
-            <input data-testid="login-password" v-model="password" type="password" autocomplete="current-password" />
-          </label>
-          <p class="error" v-if="error">{{ error }}</p>
-          <button class="primary" data-testid="login-submit" :disabled="pending" type="submit">进入书案</button>
-        </form>
-        <p>还没有账号？ <router-link to="/register" data-testid="register-link">注册</router-link></p>
-      </div>
-    </section>
+      <h1>登录</h1>
+      <p class="muted">使用云笺账号继续编辑文稿、表格和演示。</p>
+      <label>用户名
+        <input data-testid="login-username" v-model="username" autocomplete="username" />
+      </label>
+      <label>密码
+        <input data-testid="login-password" v-model="password" type="password" autocomplete="current-password" />
+      </label>
+      <p class="error" v-if="error">{{ error }}</p>
+      <button class="primary" data-testid="login-submit" :disabled="pending" type="submit">登录</button>
+      <p class="auth-switch">还没有账号？ <router-link to="/register" data-testid="register-link">注册</router-link></p>
+    </form>
   </main>
 </template>
