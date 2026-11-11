@@ -159,7 +159,7 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .note-input { width: 180px; }
 .editor-body { display: grid; grid-template-columns: 1fr 320px; min-height: 0; flex: 1; }
 .editor-body.closed { grid-template-columns: 1fr; }
-.stage { padding: 24px; overflow: auto; }
+.stage { padding: 24px; overflow: auto; min-width: 0; }
 .drawer {
   border-left: 1px solid var(--line);
   background: #fffaf3;
@@ -213,16 +213,73 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .word-line[data-align="center"] .word-block { text-align: center; }
 .word-line[data-align="right"] .word-block { text-align: right; }
 
-.sheet-wrap { overflow: auto; background: white; border: 1px solid var(--line); border-radius: 12px; }
+.excel-editor { outline: none; }
+.excel-editor .toolbar select,
+.excel-editor .toolbar input[type="color"] { margin-left: 4px; }
+.sheet-wrap { overflow: auto; max-width: 100%; max-height: calc(100vh - 220px); background: white; border: 1px solid var(--line); border-radius: 12px; }
 .formula-bar { display: flex; gap: 8px; margin-bottom: 10px; }
-.formula-bar span { min-width: 48px; align-self: center; font-family: var(--serif); }
+.formula-bar span { min-width: 72px; align-self: center; font-family: var(--serif); }
 .formula-bar input { flex: 1; }
-.sheet { border-collapse: collapse; min-width: 760px; }
-.sheet th, .sheet td { border: 1px solid #eadfce; min-width: 88px; height: 32px; padding: 0 6px; font-size: 14px; }
-.sheet th { background: #f7f1e6; font-weight: 500; position: sticky; top: 0; }
-.sheet td.selected { outline: 2px solid var(--cinnabar); outline-offset: -2px; background: #fff7f4; }
+.sheet { border-collapse: separate; border-spacing: 0; min-width: 760px; user-select: none; }
+.sheet th, .sheet td { border-right: 1px solid #eadfce; border-bottom: 1px solid #eadfce; min-width: 96px; height: 28px; padding: 0 6px; font-size: 13px; background: white; position: relative; white-space: pre-wrap; }
+.sheet th { background: #f7f1e6; font-weight: 500; text-align: center; }
+.sheet thead th { position: sticky; top: 0; z-index: 2; }
+.sheet th.row-head, .sheet th.corner { position: sticky; left: 0; z-index: 3; min-width: 46px; width: 46px; }
+.sheet thead th.corner { z-index: 4; }
+.sheet td.in-range { background: rgba(33, 92, 73, 0.1); }
+.sheet td.filling { outline: 1px dashed var(--pine); outline-offset: -2px; }
+.sheet td.selected { outline: 2px solid var(--pine); outline-offset: -2px; background: white; z-index: 1; }
 .sheet td.bold { font-weight: 700; }
+.sheet td.italic { font-style: italic; }
+.sheet td.underline { text-decoration: underline; }
 .sheet td.error { color: var(--cinnabar-dark); }
+.sheet td.align-left { text-align: left; }
+.sheet td.align-center { text-align: center; }
+.sheet td.align-right { text-align: right; }
+.key-catcher {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  z-index: 2;
+  background: transparent;
+  caret-color: transparent;
+}
+.key-catcher.composing { opacity: 1; background: white; caret-color: var(--ink); }
+.cell-editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 28px;
+  border: 2px solid var(--pine);
+  padding: 2px 4px;
+  resize: none;
+  z-index: 3;
+  background: white;
+  font: inherit;
+  white-space: pre;
+}
+.fill-handle {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  background: var(--pine);
+  border: 1px solid white;
+  cursor: crosshair;
+  z-index: 4;
+}
+.col-resizer { position: absolute; right: -3px; top: 0; width: 6px; height: 100%; cursor: col-resize; }
+.sheet-tabs { display: flex; gap: 6px; align-items: center; overflow: auto; margin-top: 8px; }
+.sheet-tab, .sheet-rename input { border: 1px solid var(--line); background: white; border-radius: 8px 8px 0 0; padding: 6px 10px; }
+.sheet-tab.active { background: var(--ink); color: white; }
+.sheet-rename input { width: 140px; }
 
 .ppt-layout { display: grid; grid-template-columns: 180px 1fr 220px; gap: 16px; align-items: start; }
 .slide-list, .inspector { display: grid; gap: 8px; }

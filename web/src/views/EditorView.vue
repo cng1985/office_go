@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getDocument, getVersion, restoreVersion, saveDocument, searchVersions } from '../api/document'
 import { ApiError } from '../api/http'
+import { normalizeWorkbook } from '../editors/excel'
 import { formatTime } from '../editors/kinds'
 import { applySaveSnapshot } from '../editors/save'
 import { mergeVersionPage } from '../editors/versions'
@@ -28,13 +29,18 @@ const versionsLoading = ref(false)
 const preview = ref(null)
 
 const dirty = computed(() => doc.value && JSON.stringify({ title: doc.value.title, content: draft.value }) !== saved.value)
+const excelPreview = computed(() => (preview.value && doc.value?.kind === 'excel' ? normalizeWorkbook(preview.value.content) : null))
+
+function asDraft(kind, content) {
+  return kind === 'excel' ? normalizeWorkbook(content) : content
+}
 
 async function load() {
   error.value = ''
   preview.value = null
   const result = await getDocument(route.params.id)
   doc.value = result.data
-  draft.value = structuredClone(result.data.content)
+  draft.value = structuredClone(asDraft(doc.value.kind, result.data.content))
   saved.value = JSON.stringify({ title: doc.value.title, content: draft.value })
   status.value = '已保存到云端'
   await loadVersions()
@@ -114,7 +120,7 @@ function applySaved(document, created, submitted) {
     status.value = '有未保存的修改'
   } else {
     doc.value = document
-    draft.value = cloneContent(document.content)
+    draft.value = structuredClone(asDraft(document.kind, document.content))
     saved.value = JSON.stringify({ title: doc.value.title, content: draft.value })
     status.value = created ? `已保存为版本 ${document.version_no}` : '内容没有变化'
   }
@@ -193,7 +199,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <WordEditor v-if="doc.kind === 'word' && !preview" v-model="draft" />
         <WordEditor v-else-if="doc.kind === 'word'" :model-value="preview.content" readonly />
         <ExcelEditor v-else-if="doc.kind === 'excel' && !preview" v-model="draft" />
-        <ExcelEditor v-else-if="doc.kind === 'excel'" :model-value="preview.content" readonly />
+        <ExcelEditor v-else-if="doc.kind === 'excel'" :model-value="excelPreview" readonly />
         <PptEditor v-else-if="!preview" v-model="draft" />
         <PptEditor v-else :model-value="preview.content" readonly />
       </section>
