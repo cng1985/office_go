@@ -151,6 +151,37 @@ func TestExcelCanonicalAcceptsLegacySheet(t *testing.T) {
 	}
 }
 
+func TestWordAndPPTFormatting(t *testing.T) {
+	plain, err := Canonical(KindWord, []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"甲","bold":false,"italic":false,"underline":false}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != `{"blocks":[{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"甲","bold":false,"italic":false,"underline":false}]}]}` {
+		t.Fatalf("plain = %s", plain)
+	}
+	styled, err := Canonical(KindWord, []byte(`{"blocks":[{"id":"b1","type":"heading3","align":"justify","indent":1,"spacing":"1.5","runs":[{"text":"标题","bold":true,"italic":false,"underline":false,"strike":true,"color":"#AABBCC","highlight":"#FFEEAA","size":18,"font":"serif"},{"text":"标题","bold":true,"italic":false,"underline":false,"strike":true,"color":"#aabbcc","highlight":"#ffeeaa","size":18,"font":"serif"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(styled, []byte(`"color":"#aabbcc"`)) || !bytes.Contains(styled, []byte(`"spacing":"1.5"`)) || bytes.Count(styled, []byte(`"text"`)) != 1 {
+		t.Fatalf("styled = %s", styled)
+	}
+	if _, err := Canonical(KindWord, []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","indent":9,"runs":[{"text":"甲","bold":false,"italic":false,"underline":false}]}]}`)); err == nil {
+		t.Fatal("indent should be rejected")
+	}
+
+	deck, err := Canonical(KindPPT, []byte(`{"slides":[{"id":"s1","background":"#FFFDF8","notes":"第一行\n第二行","elements":[{"id":"e1","kind":"shape","shape":"ellipse","x":80,"y":80,"w":240,"h":140,"text":"形状","font_size":18,"color":"#112233","bold":false,"align":"center","fill":"#AABBCC","italic":true}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(deck, []byte(`"shape":"ellipse"`)) || !bytes.Contains(deck, []byte(`"fill":"#aabbcc"`)) || !bytes.Contains(deck, []byte(`第一行\n第二行`)) {
+		t.Fatalf("deck = %s", deck)
+	}
+	if _, err := Canonical(KindPPT, []byte(`{"slides":[{"id":"s1","background":"#fffdf8","elements":[{"id":"e1","kind":"text","shape":"rect","x":80,"y":80,"w":240,"h":140,"text":"","font_size":18,"color":"#112233","bold":false,"align":"left"}]}]}`)); err == nil {
+		t.Fatal("text element should not carry a shape")
+	}
+}
+
 func TestContentRejectsUnknownShape(t *testing.T) {
 	if _, err := Canonical(KindPPT, []byte(`{"slides":[{"id":"s1","background":"red","elements":[]}],"extra":1}`)); err == nil {
 		t.Fatal("unknown field and bad color should fail")

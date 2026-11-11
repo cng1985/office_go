@@ -24,10 +24,12 @@ type wordContent struct {
 }
 
 type wordBlock struct {
-	ID    string    `json:"id"`
-	Type  string    `json:"type"`
-	Align string    `json:"align"`
-	Runs  []wordRun `json:"runs"`
+	ID      string    `json:"id"`
+	Type    string    `json:"type"`
+	Align   string    `json:"align"`
+	Runs    []wordRun `json:"runs"`
+	Indent  int       `json:"indent,omitempty"`
+	Spacing string    `json:"spacing,omitempty"`
 }
 
 type wordRun struct {
@@ -35,6 +37,11 @@ type wordRun struct {
 	Bold      bool   `json:"bold"`
 	Italic    bool   `json:"italic"`
 	Underline bool   `json:"underline"`
+	Strike    bool   `json:"strike,omitempty"`
+	Color     string `json:"color,omitempty"`
+	Highlight string `json:"highlight,omitempty"`
+	Size      int    `json:"size,omitempty"`
+	Font      string `json:"font,omitempty"`
 }
 
 type excelContent struct {
@@ -75,20 +82,26 @@ type pptSlide struct {
 	ID         string       `json:"id"`
 	Background string       `json:"background"`
 	Elements   []pptElement `json:"elements"`
+	Notes      string       `json:"notes,omitempty"`
 }
 
 type pptElement struct {
-	ID       string  `json:"id"`
-	Kind     string  `json:"kind"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	W        float64 `json:"w"`
-	H        float64 `json:"h"`
-	Text     string  `json:"text"`
-	FontSize float64 `json:"font_size"`
-	Color    string  `json:"color"`
-	Bold     bool    `json:"bold"`
-	Align    string  `json:"align"`
+	ID        string  `json:"id"`
+	Kind      string  `json:"kind"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	W         float64 `json:"w"`
+	H         float64 `json:"h"`
+	Text      string  `json:"text"`
+	FontSize  float64 `json:"font_size"`
+	Color     string  `json:"color"`
+	Bold      bool    `json:"bold"`
+	Align     string  `json:"align"`
+	Italic    bool    `json:"italic,omitempty"`
+	Underline bool    `json:"underline,omitempty"`
+	Fill      string  `json:"fill,omitempty"`
+	Shape     string  `json:"shape,omitempty"`
+	Font      string  `json:"font,omitempty"`
 }
 
 // Canonical 校验并重新序列化文档正文，保证摘要稳定。
@@ -140,7 +153,7 @@ func Blank(kind string) ([]byte, error) {
 	case KindExcel:
 		return Canonical(kind, []byte(`{"sheets":[{"name":"Sheet1","row_count":40,"col_count":16,"cells":[]}]}`))
 	case KindPPT:
-		return Canonical(kind, []byte(`{"slides":[{"id":"s1","background":"#fffdf8","elements":[{"id":"e1","kind":"text","x":72,"y":78,"w":760,"h":92,"text":"单击编辑标题","font_size":40,"color":"#1c1915","bold":true,"align":"left"}]}]}`))
+		return Canonical(kind, []byte(`{"slides":[{"id":"s1","background":"#fffdf8","elements":[{"id":"e1","kind":"text","x":72,"y":168,"w":816,"h":96,"text":"单击编辑标题","font_size":44,"color":"#1c1915","bold":true,"align":"left"},{"id":"e2","kind":"text","x":72,"y":280,"w":760,"h":56,"text":"单击编辑副标题","font_size":22,"color":"#6b6258","bold":false,"align":"left"}]}]}`))
 	default:
 		return nil, apperrors.BadRequest(400, "不支持的文档类型")
 	}
@@ -193,17 +206,30 @@ func validateWord(content *wordContent) error {
 		}
 		seen[block.ID] = struct{}{}
 		switch block.Type {
-		case "paragraph", "heading1", "heading2", "bullet", "numbered":
+		case "paragraph", "heading1", "heading2", "heading3", "bullet", "numbered", "quote", "break":
 		default:
 			return apperrors.BadRequest(400, "文稿段落类型无效")
 		}
 		switch block.Align {
-		case "left", "center", "right":
+		case "left", "center", "right", "justify":
 		default:
 			return apperrors.BadRequest(400, "文稿对齐方式无效")
 		}
+		if block.Indent < 0 || block.Indent > 8 {
+			return apperrors.BadRequest(400, "文稿缩进无效")
+		}
+		switch block.Spacing {
+		case "", "1.5", "2":
+		default:
+			return apperrors.BadRequest(400, "文稿行距无效")
+		}
 		if len(block.Runs) < 1 || len(block.Runs) > 100 {
 			return apperrors.BadRequest(400, "文稿文本片段数量无效")
+		}
+		for i := range block.Runs {
+			if err := normalizeRun(&block.Runs[i]); err != nil {
+				return err
+			}
 		}
 		block.Runs = normalizeRuns(block.Runs)
 		blockRunes := 0
@@ -232,7 +258,7 @@ func normalizeRuns(runs []wordRun) []wordRun {
 		}
 		if len(out) > 0 {
 			prev := &out[len(out)-1]
-			if prev.Bold == run.Bold && prev.Italic == run.Italic && prev.Underline == run.Underline {
+			if sameRunStyle(*prev, run) {
 				prev.Text += run.Text
 				continue
 			}
@@ -243,6 +269,30 @@ func normalizeRuns(runs []wordRun) []wordRun {
 		return []wordRun{{}}
 	}
 	return out
+}
+
+func normalizeRun(run *wordRun) error {
+	run.Color = strings.ToLower(run.Color)
+	run.Highlight = strings.ToLower(run.Highlight)
+	if run.Color != "" && !colorPattern.MatchString(run.Color) {
+		return apperrors.BadRequest(400, "文字颜色无效")
+	}
+	if run.Highlight != "" && !colorPattern.MatchString(run.Highlight) {
+		return apperrors.BadRequest(400, "文字高亮无效")
+	}
+	if run.Size != 0 && (run.Size < 8 || run.Size > 72) {
+		return apperrors.BadRequest(400, "字号无效")
+	}
+	switch run.Font {
+	case "", "serif", "sans", "mono":
+	default:
+		return apperrors.BadRequest(400, "字体无效")
+	}
+	return nil
+}
+
+func sameRunStyle(a, b wordRun) bool {
+	return a.Bold == b.Bold && a.Italic == b.Italic && a.Underline == b.Underline && a.Strike == b.Strike && a.Color == b.Color && a.Highlight == b.Highlight && a.Size == b.Size && a.Font == b.Font
 }
 
 func validateExcel(content *excelContent) error {
@@ -388,6 +438,10 @@ func validatePPT(content *pptContent) error {
 		if !colorPattern.MatchString(slide.Background) {
 			return apperrors.BadRequest(400, "幻灯片背景色无效")
 		}
+		slide.Background = strings.ToLower(slide.Background)
+		if utf8.RuneCountInString(slide.Notes) > 4000 || hasControl(slide.Notes, true) {
+			return apperrors.BadRequest(400, "幻灯片备注过长或包含不支持的字符")
+		}
 		if slide.Elements == nil {
 			slide.Elements = []pptElement{}
 		}
@@ -404,7 +458,18 @@ func validatePPT(content *pptContent) error {
 				return apperrors.BadRequest(400, "幻灯片元素标识重复")
 			}
 			elements[element.ID] = struct{}{}
-			if element.Kind != "text" {
+			switch element.Kind {
+			case "text":
+				if element.Shape != "" {
+					return apperrors.BadRequest(400, "幻灯片元素类型无效")
+				}
+			case "shape":
+				switch element.Shape {
+				case "rect", "ellipse", "round":
+				default:
+					return apperrors.BadRequest(400, "幻灯片形状无效")
+				}
+			default:
 				return apperrors.BadRequest(400, "幻灯片元素类型无效")
 			}
 			if !finite(element.X) || !finite(element.Y) || !finite(element.W) || !finite(element.H) || !finite(element.FontSize) {
@@ -416,8 +481,18 @@ func validatePPT(content *pptContent) error {
 			if element.FontSize < 12 || element.FontSize > 96 {
 				return apperrors.BadRequest(400, "字号无效")
 			}
+			element.Color = strings.ToLower(element.Color)
+			element.Fill = strings.ToLower(element.Fill)
 			if !colorPattern.MatchString(element.Color) {
 				return apperrors.BadRequest(400, "文字颜色无效")
+			}
+			if element.Fill != "" && !colorPattern.MatchString(element.Fill) {
+				return apperrors.BadRequest(400, "形状填充无效")
+			}
+			switch element.Font {
+			case "", "serif", "sans", "mono":
+			default:
+				return apperrors.BadRequest(400, "字体无效")
 			}
 			switch element.Align {
 			case "left", "center", "right":
