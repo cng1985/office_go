@@ -20,7 +20,7 @@ const note = ref('')
 const error = ref('')
 const status = ref('已保存')
 const pending = ref(false)
-const drawer = ref(true)
+const drawer = ref(false)
 const versions = ref([])
 const versionTotal = ref(0)
 const versionPage = ref(1)
@@ -43,6 +43,7 @@ async function load() {
   draft.value = structuredClone(asDraft(doc.value.kind, result.data.content))
   saved.value = JSON.stringify({ title: doc.value.title, content: draft.value })
   status.value = '已保存到云端'
+  drawer.value = doc.value.kind !== 'word'
   await loadVersions()
 }
 
@@ -177,14 +178,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 <template>
   <p class="error" v-if="!doc && error" style="margin: 24px">{{ error }}</p>
-  <div class="editor-shell" v-if="doc && draft">
+  <div class="editor-shell" :class="{ 'word-mode': doc.kind === 'word' }" v-if="doc && draft">
     <header class="editor-bar">
-      <router-link class="brand" to="/"><span class="brand-mark">笺</span></router-link>
+      <router-link v-if="doc.kind === 'word'" class="word-back" to="/" aria-label="返回">‹</router-link>
+      <router-link v-else class="brand" to="/"><span class="brand-mark">笺</span></router-link>
+      <span v-if="doc.kind === 'word'" class="word-doc-icon" aria-hidden="true">W</span>
       <input class="title-input" data-testid="doc-title" v-model="doc.title" :disabled="!!preview" />
-      <input class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
+      <input v-if="doc.kind !== 'word'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
       <span class="status" data-testid="save-status">{{ status }}</span>
-      <button class="primary" type="button" data-testid="save-button" :disabled="pending || !!preview" @click="save">保存到云端</button>
-      <button class="ghost" type="button" data-testid="version-button" @click="drawer = !drawer">版本</button>
+      <button class="primary" :class="{ 'word-save': doc.kind === 'word' }" type="button" data-testid="save-button" :disabled="pending || !!preview" @click="save">{{ doc.kind === 'word' ? '保存' : '保存到云端' }}</button>
+      <button class="ghost" type="button" data-testid="version-button" @click="drawer = !drawer">{{ doc.kind === 'word' ? '历史' : '版本' }}</button>
     </header>
     <p class="error" v-if="error" style="margin: 12px 28px">{{ error }}</p>
     <div class="editor-body" :class="{ closed: !drawer }">
@@ -196,7 +199,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             <button class="primary" type="button" data-testid="restore-button" @click="restore">恢复此版本</button>
           </span>
         </div>
-        <WordEditor v-if="doc.kind === 'word' && !preview" v-model="draft" />
+        <WordEditor v-if="doc.kind === 'word' && !preview" v-model="draft" @save="save" @versions="drawer = !drawer" />
         <WordEditor v-else-if="doc.kind === 'word'" :model-value="preview.content" readonly />
         <ExcelEditor v-else-if="doc.kind === 'excel' && !preview" v-model="draft" />
         <ExcelEditor v-else-if="doc.kind === 'excel'" :model-value="excelPreview" readonly />
@@ -205,6 +208,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       </section>
       <aside class="drawer" v-if="drawer" data-testid="version-drawer">
         <h3>版本记录</h3>
+        <input v-if="doc.kind === 'word'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
         <p class="muted">恢复会新增一个版本，不会抹掉后来的历史。</p>
         <button
           v-for="item in versions"

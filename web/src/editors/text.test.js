@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyMark, clipboardToLines, plainText, segmentsFromElement } from './text.js'
+import {
+  applyMark,
+  applyStyle,
+  clipboardToLines,
+  findHits,
+  listMarker,
+  plainText,
+  replaceOnce,
+  textDiff,
+  segmentsFromElement,
+} from './text.js'
 
 test('apply bold to a middle range and keep surrounding text', () => {
   const runs = [{ text: '云笺编辑', bold: false, italic: false, underline: false }]
@@ -25,6 +35,26 @@ function elementNode(tag, children, style = {}) {
   })
   return node
 }
+
+test('styles, lists and find follow the edited range', () => {
+  const runs = [{ text: '云笺编辑', bold: false, italic: false, underline: false }]
+  const colored = applyStyle(runs, 1, 3, { color: '#112233', strike: true })
+  assert.equal(plainText(colored), '云笺编辑')
+  assert.equal(colored[1].color, '#112233')
+  assert.equal(colored[1].strike, true)
+  assert.equal(textDiff('云笺', '云笺文档').insert, 2)
+  const blocks = [
+    { type: 'numbered', indent: 0, runs: [{ text: '甲' }] },
+    { type: 'numbered', indent: 1, runs: [{ text: '子' }] },
+    { type: 'paragraph', runs: [{ text: '隔断' }] },
+    { type: 'numbered', indent: 0, runs: [{ text: '乙' }] },
+  ]
+  assert.equal(listMarker(blocks, 0), '1.')
+  assert.equal(listMarker(blocks, 1), 'a.')
+  assert.equal(listMarker(blocks, 3), '1.')
+  assert.deepEqual(findHits(blocks, '乙'), [{ block: 3, start: 0, end: 1 }])
+  assert.equal(plainText(replaceOnce(blocks[0].runs, 0, 1, '丙')), '丙')
+})
 
 test('soft breaks and pasted blocks become separate paragraphs', () => {
   const trailing = elementNode('DIV', [textNode('今天'), elementNode('BR', [])])
