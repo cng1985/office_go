@@ -6,7 +6,11 @@ export const MAX_SHEETS = 20
 export const MAX_INPUT = 2000
 
 const ALIGNS = new Set(['left', 'center', 'right'])
-const FORMATS = new Set(['number', 'percent', 'date', 'text'])
+const VALIGNS = new Set(['top', 'middle', 'bottom'])
+const FORMATS = new Set(['number', 'percent', 'currency', 'date', 'text'])
+const FONTS = new Set(['serif', 'sans', 'mono'])
+const BORDERS = new Set(['bottom', 'all', 'outer'])
+export const STYLE_KEYS = ['bold', 'italic', 'underline', 'strike', 'align', 'valign', 'format', 'color', 'fill', 'font', 'size', 'wrap', 'border', 'rotate', 'decimals']
 
 export function normalizeWorkbook(content) {
   const source = content && typeof content === 'object' ? content : {}
@@ -79,6 +83,7 @@ export function shiftFormula(input, deltaRow, deltaCol) {
 
 export function insertRows(sheet, at, count = 1, workbook = null) {
   if (sheet.row_count + count > MAX_ROWS) return false
+  releaseMerges(sheet, 'row', at, count, 'insert')
   sheet.row_count += count
   for (const cell of sheet.cells) {
     if (cell.row >= at) cell.row += count
@@ -90,6 +95,7 @@ export function insertRows(sheet, at, count = 1, workbook = null) {
 
 export function deleteRows(sheet, at, count = 1, workbook = null) {
   if (sheet.row_count - count < 1) return false
+  releaseMerges(sheet, 'row', at, count, 'delete')
   sheet.cells = sheet.cells.filter((cell) => cell.row < at || cell.row >= at + count)
   for (const cell of sheet.cells) {
     if (cell.row >= at + count) cell.row -= count
@@ -102,6 +108,7 @@ export function deleteRows(sheet, at, count = 1, workbook = null) {
 
 export function insertCols(sheet, at, count = 1, workbook = null) {
   if (sheet.col_count + count > MAX_COLS) return false
+  releaseMerges(sheet, 'col', at, count, 'insert')
   if (Array.isArray(sheet.col_widths) && sheet.col_widths.length) {
     const widths = sheet.col_widths.slice()
     while (widths.length < sheet.col_count) widths.push(0)
@@ -119,6 +126,7 @@ export function insertCols(sheet, at, count = 1, workbook = null) {
 
 export function deleteCols(sheet, at, count = 1, workbook = null) {
   if (sheet.col_count - count < 1) return false
+  releaseMerges(sheet, 'col', at, count, 'delete')
   if (Array.isArray(sheet.col_widths) && sheet.col_widths.length) {
     const widths = sheet.col_widths.slice()
     while (widths.length < sheet.col_count) widths.push(0)
@@ -198,20 +206,48 @@ export function pasteCells(sheet, row, col, matrix) {
     line.forEach((cell, dc) => {
       const destRow = row + dr
       const destCol = col + dc
-      if (!ensureGrid(sheet, destRow, destCol)) return
+      const span = mergeSpan(cell, destRow, destCol)
+      if (!ensureGrid(sheet, destRow + span.rows - 1, destCol + span.cols - 1)) return
       if (!cell) {
         const existing = findCell(sheet, destRow, destCol)
         if (existing) putCell(sheet, { ...existing, input: '' })
         return
       }
-      putCell(sheet, {
+      const next = {
         ...cell,
         row: destRow,
         col: destCol,
         input: shiftFormula(cell.input, destRow - cell.row, destCol - cell.col),
-      })
+      }
+      if (span.rows > 1) next.merge_rows = span.rows
+      else delete next.merge_rows
+      if (span.cols > 1) next.merge_cols = span.cols
+      else delete next.merge_cols
+      putCell(sheet, next)
     })
   })
+}
+
+export function visibleCell(sheet, row, col) {
+  return mergeAnchor(sheet, row, col)
+}
+
+export function stepCell(sheet, row, col, dRow, dCol) {
+  const origin = mergeAnchor(sheet, row, col)
+  let nextRow = row
+  let nextCol = col
+  const limit = (sheet?.row_count || 1) + (sheet?.col_count || 1)
+  for (let i = 0; i < limit; i += 1) {
+    const candidateRow = nextRow + dRow
+    const candidateCol = nextCol + dCol
+    if (candidateRow < 1 || candidateCol < 1 || candidateRow > sheet.row_count || candidateCol > sheet.col_count) return origin
+    nextRow = candidateRow
+    nextCol = candidateCol
+    const anchor = mergeAnchor(sheet, nextRow, nextCol)
+    if (anchor.row === origin.row && anchor.col === origin.col && mergedAt(sheet, origin)) continue
+    return anchor
+  }
+  return origin
 }
 
 export function sortRows(sheet, range, col, direction, workbook) {
@@ -319,16 +355,55 @@ function normalizeStoredCell(raw) {
   if (raw.bold) cell.bold = true
   if (raw.italic) cell.italic = true
   if (raw.underline) cell.underline = true
+  if (raw.strike) cell.strike = true
   if (ALIGNS.has(raw.align)) cell.align = raw.align
+  if (VALIGNS.has(raw.valign)) cell.valign = raw.valign
   if (FORMATS.has(raw.format)) cell.format = raw.format
+  if (FONTS.has(raw.font)) cell.font = raw.font
   if (isColor(raw.color)) cell.color = String(raw.color).toLowerCase()
   if (isColor(raw.fill)) cell.fill = String(raw.fill).toLowerCase()
+  const size = Number(raw.size)
+  if (Number.isInteger(size) && size >= 6 && size <= 72) cell.size = size
+  if (raw.wrap) cell.wrap = true
+  if (BORDERS.has(raw.border)) cell.border = raw.border
+  if (raw.rotate === 'v') cell.rotate = 'v'
+  const decimals = Number(raw.decimals)
+  if (Number.isInteger(decimals) && decimals >= 0 && decimals <= 6 && raw.decimals !== '' && raw.decimals != null) cell.decimals = decimals
+  const note = String(raw.note || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, 500)
+  if (note) cell.note = note
+  const mergeRows = Number(raw.merge_rows) || 1
+  const mergeCols = Number(raw.merge_cols) || 1
+  if (mergeRows >= 1 && mergeCols >= 1 && (mergeRows > 1 || mergeCols > 1) && raw.row + mergeRows - 1 <= MAX_ROWS && raw.col + mergeCols - 1 <= MAX_COLS) {
+    if (mergeRows > 1) cell.merge_rows = mergeRows
+    if (mergeCols > 1) cell.merge_cols = mergeCols
+  }
   if (!cellHasContent(cell)) return null
   return cell
 }
 
 function cellHasContent(cell) {
-  return Boolean(cell.input || cell.bold || cell.italic || cell.underline || cell.align || cell.format || cell.color || cell.fill)
+  return Boolean(
+    cell.input || cell.bold || cell.italic || cell.underline || cell.strike || cell.align || cell.valign
+    || cell.format || cell.color || cell.fill || cell.font || cell.size || cell.wrap || cell.border
+    || cell.rotate || cell.note || Number.isInteger(cell.decimals) || cell.merge_rows || cell.merge_cols,
+  )
+}
+
+function releaseMerges(sheet, axis, at, count, mode) {
+  for (const cell of sheet.cells || []) {
+    const spanRow = cell.merge_rows || 1
+    const spanCol = cell.merge_cols || 1
+    if (spanRow === 1 && spanCol === 1) continue
+    const start = axis === 'row' ? cell.row : cell.col
+    const span = axis === 'row' ? spanRow : spanCol
+    const end = start + span - 1
+    const hit = mode === 'insert'
+      ? at > start && at <= end
+      : !(end < at || start > at + count - 1)
+    if (!hit) continue
+    delete cell.merge_rows
+    delete cell.merge_cols
+  }
 }
 
 function normalizeWidths(widths, cols) {
@@ -358,6 +433,32 @@ function clamp(value, fallback, min, max) {
 
 function isColor(value) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || ''))
+}
+
+function mergeSpan(cell, destRow, destCol) {
+  let rows = Math.max(1, Number(cell?.merge_rows) || 1)
+  let cols = Math.max(1, Number(cell?.merge_cols) || 1)
+  if (destRow < 1 || destCol < 1 || destRow > MAX_ROWS || destCol > MAX_COLS) return { rows: 1, cols: 1 }
+  rows = Math.min(rows, MAX_ROWS - destRow + 1)
+  cols = Math.min(cols, MAX_COLS - destCol + 1)
+  return { rows, cols }
+}
+
+function mergeAnchor(sheet, row, col) {
+  for (const cell of sheet?.cells || []) {
+    const rows = cell.merge_rows || 1
+    const cols = cell.merge_cols || 1
+    if (rows === 1 && cols === 1) continue
+    if (row >= cell.row && row < cell.row + rows && col >= cell.col && col < cell.col + cols) {
+      return { row: cell.row, col: cell.col }
+    }
+  }
+  return { row, col }
+}
+
+function mergedAt(sheet, anchor) {
+  const cell = findCell(sheet, anchor.row, anchor.col)
+  return (cell?.merge_rows || 1) > 1 || (cell?.merge_cols || 1) > 1
 }
 
 function ensureGrid(sheet, row, col) {
@@ -444,7 +545,11 @@ function numericSeries(sheet, from, to, fixed, axis) {
 function putNumber(sheet, row, col, value, style) {
   const input = String(Math.round(value * 1e10) / 1e10)
   const next = { row, col, input }
-  for (const key of ['bold', 'italic', 'underline', 'align', 'format', 'color', 'fill']) {
+  for (const key of STYLE_KEYS) {
+    if (key === 'decimals') {
+      if (Number.isInteger(style?.decimals)) next.decimals = style.decimals
+      continue
+    }
     if (style?.[key]) next[key] = style[key]
   }
   putCell(sheet, next)

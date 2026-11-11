@@ -228,10 +228,28 @@ function formatResult(result, record) {
   if (format === 'text') return result.textOnly ? result.text : formatNumber(result.value)
   if (result.textOnly) return result.text || ''
   if (typeof result.value !== 'number' || !Number.isFinite(result.value)) return result.text || ''
-  if (format === 'percent') return `${formatNumber(result.value * 100)}%`
-  if (format === 'number') return result.value.toFixed(2)
+  const places = Number.isInteger(record?.decimals) ? record.decimals : null
+  if (format === 'percent') return `${places == null ? formatNumber(result.value * 100) : formatFixed(result.value * 100, places)}%`
+  if (format === 'currency') return formatCurrency(result.value, places == null ? 2 : places)
+  if (format === 'number') return places == null ? result.value.toFixed(2) : formatFixed(result.value, places)
   if (format === 'date') return formatDate(result.value)
+  if (places != null) return formatFixed(result.value, places)
   return formatNumber(result.value)
+}
+
+function formatFixed(value, places) {
+  const negative = value < 0
+  const fixed = Math.abs(value).toFixed(places)
+  const [whole, frac] = fixed.split('.')
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const text = places > 0 ? `${grouped}.${frac}` : grouped
+  return negative ? `-${text}` : text
+}
+
+function formatCurrency(value, places) {
+  const negative = value < 0
+  const text = formatFixed(Math.abs(value), places)
+  return negative ? `-¥${text}` : `¥${text}`
 }
 
 function formatDate(serial) {
