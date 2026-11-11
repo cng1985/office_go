@@ -1,0 +1,33 @@
+app:
+  name: yunjian
+server:
+  host: 127.0.0.1
+  port: 8080
+  read_header_timeout: 5s
+  idle_timeout: 60s
+  max_header_bytes: 1048576
+  shutdown_timeout: 30s
+  request_timeout: 30s
+  sse_timeout: 15m
+  # 文档正文使用 JSON 提交，默认 2MiB 不够，项目放宽到 8MiB。业务层仍限制规范化正文不超过 1MiB。
+  max_body_bytes: 8388608
+  trusted_proxies: []
+database:
+  enabled: true
+  driver: sqlite
+  max_open_conns: 1
+  max_idle_conns: 1
+  conn_max_lifetime: 30m
+  batch_size: 100
+  sqlite:
+    path: app.db
+    foreign_keys: true
+    busy_timeout: 5s
+    journal_mode: DELETE
+auth:
+  enabled: true
+  session_ttl: 8h
+  cookie_secure: false
+logging:
+  level: info
+  format: text
