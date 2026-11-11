@@ -20,6 +20,14 @@ export function deleteDocument(id) {
   return post('/api/document/delete', { id })
 }
 
+export function importDocument(body) {
+  return post('/api/document/import', body)
+}
+
+export function exportDocument(id) {
+  return post('/api/document/export', { id })
+}
+
 export function saveDocument(body) {
   return post('/api/document/save', body)
 }

@@ -2,6 +2,8 @@ package document
 
 import (
 	"context"
+	"encoding/base64"
+	"strings"
 	"unicode/utf8"
 
 	apperrors "yunjian/internal/platform/errors"
@@ -176,4 +178,82 @@ func (r *Resource) Restore(ctx context.Context, request *DocumentRestoreRequest)
 	}
 	request.Note = note
 	return r.repo.Restore(ctx, request)
+}
+
+func (r *Resource) Import(ctx context.Context, request *DocumentImportRequest) (response.Response[DocumentResponse], error) {
+	var zero response.Response[DocumentResponse]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	filename := strings.TrimSpace(request.Filename)
+	if filename == "" || utf8.RuneCountInString(filename) > 255 {
+		return zero, apperrors.BadRequest(400, "文件名无效")
+	}
+	raw, err := decodeUpload(request.ContentBase64)
+	if err != nil {
+		return zero, err
+	}
+	kind, title, content, err := ImportFile(filename, raw)
+	if err != nil {
+		return zero, err
+	}
+	title, err = normalizeTitle(title)
+	if err != nil {
+		return zero, err
+	}
+	return r.repo.Import(ctx, kind, title, content)
+}
+
+func (r *Resource) Export(ctx context.Context, request *DocumentExportRequest) (response.Response[DocumentFile], error) {
+	var zero response.Response[DocumentFile]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	if err := requireID(request.ID); err != nil {
+		return zero, err
+	}
+	current, err := r.repo.One(ctx, &DocumentIDRequest{ID: request.ID})
+	if err != nil {
+		return zero, err
+	}
+	file, err := ExportFile(current.Data.Kind, current.Data.Title, current.Data.Content)
+	if err != nil {
+		return zero, err
+	}
+	return response.OK(DocumentFile{
+		Filename:      file.Filename,
+		MediaType:     file.MediaType,
+		ContentBase64: base64.StdEncoding.EncodeToString(file.Body),
+	}), nil
+}
+
+func decodeUpload(encoded string) ([]byte, error) {
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		default:
+			return r
+		}
+	}, strings.TrimSpace(encoded))
+	if cleaned == "" {
+		return nil, apperrors.BadRequest(400, "文件内容为空")
+	}
+	if len(cleaned) > (1<<20)*2 {
+		return nil, apperrors.TooLarge(413, "文件超过 1MB 限制")
+	}
+	raw, err := base64.StdEncoding.DecodeString(cleaned)
+	if err != nil {
+		raw, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(cleaned, "="))
+	}
+	if err != nil {
+		return nil, apperrors.BadRequest(400, "文件内容无法读取")
+	}
+	if len(raw) == 0 {
+		return nil, apperrors.BadRequest(400, "文件内容为空")
+	}
+	if len(raw) > 1<<20 {
+		return nil, apperrors.TooLarge(413, "文件超过 1MB 限制")
+	}
+	return raw, nil
 }

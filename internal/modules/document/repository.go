@@ -39,12 +39,21 @@ type detailRow struct {
 }
 
 func (r *Repository) Create(ctx context.Context, request *DocumentCreateRequest) (response.Response[DocumentResponse], error) {
+	var zero response.Response[DocumentResponse]
+	content, err := Blank(request.Kind)
+	if err != nil {
+		return zero, err
+	}
+	return r.insertNew(ctx, request.Kind, request.Title, content, "创建文档")
+}
+
+func (r *Repository) Import(ctx context.Context, kind, title string, content []byte) (response.Response[DocumentResponse], error) {
+	return r.insertNew(ctx, kind, title, content, "上传文件")
+}
+
+func (r *Repository) insertNew(ctx context.Context, kind, title string, content []byte, note string) (response.Response[DocumentResponse], error) {
 	var result response.Response[DocumentResponse]
 	scope, err := requireScope(ctx)
-	if err != nil {
-		return result, err
-	}
-	content, err := Blank(request.Kind)
 	if err != nil {
 		return result, err
 	}
@@ -52,8 +61,8 @@ func (r *Repository) Create(ctx context.Context, request *DocumentCreateRequest)
 		now := time.Now().UTC()
 		entity := &Document{
 			OwnerID:   scope.ActorID,
-			Kind:      request.Kind,
-			Title:     request.Title,
+			Kind:      kind,
+			Title:     title,
 			Revision:  1,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -61,7 +70,7 @@ func (r *Repository) Create(ctx context.Context, request *DocumentCreateRequest)
 		if err := tx.Omit(clause.Associations).Create(entity).Error; err != nil {
 			return mapWriteError(err)
 		}
-		if _, err := insertVersion(tx, entity, content, "创建文档", scope.ActorID, now); err != nil {
+		if _, err := insertVersion(tx, entity, content, note, scope.ActorID, now); err != nil {
 			return err
 		}
 		row, err := loadDetail(tx, entity.ID, scope.ActorID)
