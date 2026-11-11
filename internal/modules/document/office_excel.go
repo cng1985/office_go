@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	apperrors "yunjian/internal/platform/errors"
 )
+
+var numberPattern = regexp.MustCompile(`^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$`)
 
 func exportXlsx(canonical []byte) ([]byte, error) {
 	var content excelContent
@@ -137,7 +141,25 @@ func writeSheetCell(body *strings.Builder, cell excelCell) {
 		fmt.Fprintf(body, `<c r="%s"%s><f>%s</f></c>`, ref, style, xmlEscape(strings.TrimPrefix(cell.Input, "=")))
 		return
 	}
+	if cell.Format != "text" {
+		if literal, ok := numericLiteral(cell.Input); ok {
+			fmt.Fprintf(body, `<c r="%s"%s><v>%s</v></c>`, ref, style, literal)
+			return
+		}
+	}
 	fmt.Fprintf(body, `<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>`, ref, style, xmlEscape(cell.Input))
+}
+
+func numericLiteral(input string) (string, bool) {
+	trimmed := strings.TrimSpace(input)
+	if !numberPattern.MatchString(trimmed) {
+		return "", false
+	}
+	value, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return "", false
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64), true
 }
 
 func fontBits(cell excelCell) int {
@@ -428,8 +450,13 @@ func parseShared(data []byte) []string {
 
 type sheetCell struct {
 	excelCell
-	style int
-	kind  string
+	style       int
+	kind        string
+	formulaText string
+	formulaType string
+	formulaSI   string
+	cached      string
+	inlineText  string
 }
 
 func parseWorksheet(data []byte, fonts []fontStyle, shared []string) (*excelSheet, error) {
@@ -440,6 +467,7 @@ func parseWorksheet(data []byte, fonts []fontStyle, shared []string) (*excelShee
 	var cell *sheetCell
 	inFormula, inValue, inInline, inText := 0, 0, 0, 0
 	var formula, value, inline strings.Builder
+	formulaType, formulaSI := "", ""
 	err := walkXML(data, func(token xml.Token) error {
 		switch node := token.(type) {
 		case xml.StartElement:
@@ -465,8 +493,11 @@ func parseWorksheet(data []byte, fonts []fontStyle, shared []string) (*excelShee
 				formula.Reset()
 				value.Reset()
 				inline.Reset()
+				formulaType, formulaSI = "", ""
 			case "f":
 				inFormula++
+				formulaType = attr(node, "t")
+				formulaSI = attr(node, "si")
 			case "v":
 				inValue++
 			case "is":
@@ -508,11 +539,11 @@ func parseWorksheet(data []byte, fonts []fontStyle, shared []string) (*excelShee
 				}
 			case "c":
 				if cell != nil {
-					input, inputErr := cellInput(cell.kind, formula.String(), value.String(), inline.String(), shared)
-					if inputErr != nil {
-						return inputErr
-					}
-					cell.Input = cleanMultiline(input)
+					cell.formulaText = formula.String()
+					cell.formulaType = formulaType
+					cell.formulaSI = formulaSI
+					cell.cached = value.String()
+					cell.inlineText = inline.String()
 					applyFont(cell, fonts)
 					key := [2]int{cell.Row, cell.Col}
 					if _, found := cells[key]; !found {
@@ -541,7 +572,203 @@ func parseWorksheet(data []byte, fonts []fontStyle, shared []string) (*excelShee
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	if err := applyInputs(order, cells, shared); err != nil {
+		return nil, err
+	}
 	return sheetFromCells(order, cells)
+}
+
+type formulaAnchor struct {
+	text string
+	row  int
+	col  int
+}
+
+func applyInputs(order [][2]int, cells map[[2]int]sheetCell, shared []string) error {
+	anchors := map[string]formulaAnchor{}
+	for _, key := range order {
+		cell := cells[key]
+		if cell.formulaType == "shared" && strings.TrimSpace(cell.formulaText) != "" && cell.formulaSI != "" {
+			anchors[cell.formulaSI] = formulaAnchor{text: strings.TrimSpace(cell.formulaText), row: cell.Row, col: cell.Col}
+		}
+	}
+	for _, key := range order {
+		cell := cells[key]
+		var input string
+		var err error
+		switch {
+		case cell.formulaType == "shared":
+			anchor, ok := anchors[cell.formulaSI]
+			if !ok {
+				return apperrors.BadRequest(400, "表格包含无法识别的共享公式")
+			}
+			input = shiftFormula(anchor.text, cell.Row-anchor.row, cell.Col-anchor.col)
+		case strings.TrimSpace(cell.formulaText) != "":
+			input, err = cellInput("", cell.formulaText, "", "", nil)
+		default:
+			input, err = cellInput(cell.kind, "", cell.cached, cell.inlineText, shared)
+		}
+		if err != nil {
+			return err
+		}
+		cell.Input = cleanMultiline(input)
+		cells[key] = cell
+	}
+	return nil
+}
+
+func shiftFormula(formula string, deltaRow, deltaCol int) string {
+	source := strings.TrimSpace(formula)
+	source = strings.TrimPrefix(source, "=")
+	var out strings.Builder
+	out.WriteByte('=')
+	for i := 0; i < len(source); {
+		if source[i] == '"' {
+			end := i + 1
+			for end < len(source) {
+				if source[end] == '"' {
+					end++
+					if end < len(source) && source[end] == '"' {
+						end++
+						continue
+					}
+					break
+				}
+				end++
+			}
+			out.WriteString(source[i:end])
+			i = end
+			continue
+		}
+		if raw, end, ok := sheetToken(source, i); ok {
+			out.WriteString(raw)
+			i = end
+			continue
+		}
+		if ref, end, ok := parseFormulaRef(source, i); ok {
+			next := ref
+			if !ref.absRow {
+				next.row += deltaRow
+			}
+			if !ref.absCol {
+				next.col += deltaCol
+			}
+			if next.row < 1 || next.col < 1 || next.row > 120 || next.col > 30 {
+				out.WriteString("#REF!")
+			} else {
+				out.WriteString(formatFormulaRef(next))
+			}
+			i = end
+			continue
+		}
+		out.WriteByte(source[i])
+		i++
+	}
+	return out.String()
+}
+
+type formulaRef struct {
+	col    int
+	row    int
+	absCol bool
+	absRow bool
+}
+
+func parseFormulaRef(source string, index int) (formulaRef, int, bool) {
+	if index > 0 && isFormulaName(source[index-1]) {
+		return formulaRef{}, 0, false
+	}
+	i := index
+	absCol := false
+	if i < len(source) && source[i] == '$' {
+		absCol = true
+		i++
+	}
+	colStart := i
+	for i < len(source) && i < colStart+3 && isFormulaLetter(source[i]) {
+		i++
+	}
+	if i == colStart {
+		return formulaRef{}, 0, false
+	}
+	absRow := false
+	if i < len(source) && source[i] == '$' {
+		absRow = true
+		i++
+	}
+	rowStart := i
+	if rowStart >= len(source) || source[rowStart] < '1' || source[rowStart] > '9' {
+		return formulaRef{}, 0, false
+	}
+	i++
+	for i < len(source) && source[i] >= '0' && source[i] <= '9' {
+		i++
+	}
+	col := colIndex(source[colStart:rowStart])
+	if absRow {
+		col = colIndex(source[colStart : rowStart-1])
+	}
+	row, err := strconv.Atoi(source[rowStart:i])
+	if err != nil || col < 1 || col > 30 || row < 1 || row > 120 {
+		return formulaRef{}, 0, false
+	}
+	return formulaRef{col: col, row: row, absCol: absCol, absRow: absRow}, i, true
+}
+
+func formatFormulaRef(ref formulaRef) string {
+	col := ""
+	row := ""
+	if ref.absCol {
+		col = "$"
+	}
+	if ref.absRow {
+		row = "$"
+	}
+	return col + colName(ref.col) + row + strconv.Itoa(ref.row)
+}
+
+func sheetToken(source string, index int) (string, int, bool) {
+	if index < len(source) && source[index] == '\'' {
+		i := index + 1
+		for i < len(source) {
+			if source[i] == '\'' {
+				if i+1 < len(source) && source[i+1] == '\'' {
+					i += 2
+					continue
+				}
+				i++
+				break
+			}
+			i++
+		}
+		if i >= len(source) || source[i] != '!' {
+			return "", 0, false
+		}
+		return source[index : i+1], i + 1, true
+	}
+	if index > 0 && isFormulaName(source[index-1]) {
+		return "", 0, false
+	}
+	i := index
+	if i >= len(source) || !isFormulaLetter(source[i]) {
+		return "", 0, false
+	}
+	i++
+	for i < len(source) && (isFormulaName(source[i]) || source[i] == '.') {
+		i++
+	}
+	if i >= len(source) || source[i] != '!' {
+		return "", 0, false
+	}
+	return source[index : i+1], i + 1, true
+}
+
+func isFormulaLetter(value byte) bool {
+	return value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
+func isFormulaName(value byte) bool {
+	return isFormulaLetter(value) || value >= '0' && value <= '9' || value == '_'
 }
 
 func cellInput(kind, formula, value, inline string, shared []string) (string, error) {
