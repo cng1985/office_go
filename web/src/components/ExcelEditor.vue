@@ -26,7 +26,9 @@ import {
   setActive,
   setColumnWidth,
   sortRows,
+  stepCell,
   uniqueSheetName,
+  visibleCell,
   usedBounds,
   writeInput,
 } from '../editors/excel'
@@ -326,11 +328,11 @@ function onCompositionEnd(event) {
 }
 
 function move(dRow, dCol, extend = false) {
-  const row = Math.min(sheet.value.row_count, Math.max(1, focusCell.value.row + dRow))
-  const col = Math.min(sheet.value.col_count, Math.max(1, focusCell.value.col + dCol))
-  if (!extend) anchor.value = { row, col }
-  focusCell.value = { row, col }
-  scrollIntoView(row, col)
+  const next = stepCell(sheet.value, focusCell.value.row, focusCell.value.col, dRow, dCol)
+  if (!extend) anchor.value = { row: next.row, col: next.col }
+  focusCell.value = { row: next.row, col: next.col }
+  scrollIntoView(next.row, next.col)
+  focusGrid()
 }
 
 function jump(dRow, dCol, extend = false) {
@@ -370,9 +372,11 @@ function jump(dRow, dCol, extend = false) {
       col = dCol > 0 ? sheet.value.col_count : dCol < 0 ? 1 : col
     }
   }
-  if (!extend) anchor.value = { row, col }
-  focusCell.value = { row, col }
-  scrollIntoView(row, col)
+  const landed = visibleCell(sheet.value, row, col)
+  if (!extend) anchor.value = { row: landed.row, col: landed.col }
+  focusCell.value = { row: landed.row, col: landed.col }
+  scrollIntoView(landed.row, landed.col)
+  focusGrid()
 }
 
 function scrollIntoView(row, col) {

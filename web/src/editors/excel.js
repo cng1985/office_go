@@ -206,20 +206,48 @@ export function pasteCells(sheet, row, col, matrix) {
     line.forEach((cell, dc) => {
       const destRow = row + dr
       const destCol = col + dc
-      if (!ensureGrid(sheet, destRow, destCol)) return
+      const span = mergeSpan(cell, destRow, destCol)
+      if (!ensureGrid(sheet, destRow + span.rows - 1, destCol + span.cols - 1)) return
       if (!cell) {
         const existing = findCell(sheet, destRow, destCol)
         if (existing) putCell(sheet, { ...existing, input: '' })
         return
       }
-      putCell(sheet, {
+      const next = {
         ...cell,
         row: destRow,
         col: destCol,
         input: shiftFormula(cell.input, destRow - cell.row, destCol - cell.col),
-      })
+      }
+      if (span.rows > 1) next.merge_rows = span.rows
+      else delete next.merge_rows
+      if (span.cols > 1) next.merge_cols = span.cols
+      else delete next.merge_cols
+      putCell(sheet, next)
     })
   })
+}
+
+export function visibleCell(sheet, row, col) {
+  return mergeAnchor(sheet, row, col)
+}
+
+export function stepCell(sheet, row, col, dRow, dCol) {
+  const origin = mergeAnchor(sheet, row, col)
+  let nextRow = row
+  let nextCol = col
+  const limit = (sheet?.row_count || 1) + (sheet?.col_count || 1)
+  for (let i = 0; i < limit; i += 1) {
+    const candidateRow = nextRow + dRow
+    const candidateCol = nextCol + dCol
+    if (candidateRow < 1 || candidateCol < 1 || candidateRow > sheet.row_count || candidateCol > sheet.col_count) return origin
+    nextRow = candidateRow
+    nextCol = candidateCol
+    const anchor = mergeAnchor(sheet, nextRow, nextCol)
+    if (anchor.row === origin.row && anchor.col === origin.col && mergedAt(sheet, origin)) continue
+    return anchor
+  }
+  return origin
 }
 
 export function sortRows(sheet, range, col, direction, workbook) {
@@ -405,6 +433,32 @@ function clamp(value, fallback, min, max) {
 
 function isColor(value) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || ''))
+}
+
+function mergeSpan(cell, destRow, destCol) {
+  let rows = Math.max(1, Number(cell?.merge_rows) || 1)
+  let cols = Math.max(1, Number(cell?.merge_cols) || 1)
+  if (destRow < 1 || destCol < 1 || destRow > MAX_ROWS || destCol > MAX_COLS) return { rows: 1, cols: 1 }
+  rows = Math.min(rows, MAX_ROWS - destRow + 1)
+  cols = Math.min(cols, MAX_COLS - destCol + 1)
+  return { rows, cols }
+}
+
+function mergeAnchor(sheet, row, col) {
+  for (const cell of sheet?.cells || []) {
+    const rows = cell.merge_rows || 1
+    const cols = cell.merge_cols || 1
+    if (rows === 1 && cols === 1) continue
+    if (row >= cell.row && row < cell.row + rows && col >= cell.col && col < cell.col + cols) {
+      return { row: cell.row, col: cell.col }
+    }
+  }
+  return { row, col }
+}
+
+function mergedAt(sheet, anchor) {
+  const cell = findCell(sheet, anchor.row, anchor.col)
+  return (cell?.merge_rows || 1) > 1 || (cell?.merge_cols || 1) > 1
 }
 
 function ensureGrid(sheet, row, col) {

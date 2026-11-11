@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  MAX_ROWS,
   deleteRows,
   fillRange,
   findCell,
@@ -13,6 +14,7 @@ import {
   renameSheetRefs,
   shiftFormula,
   sortRows,
+  stepCell,
 } from './excel.js'
 
 test('legacy sheet becomes a workbook', () => {
@@ -191,6 +193,40 @@ test('cell formatting and merges are kept', () => {
     merge_rows: 2,
     merge_cols: 2,
   })
+})
+
+test('pasting a merge grows the sheet across the whole span', () => {
+  const sheet = { row_count: 4, col_count: 3, cells: [] }
+  pasteCells(sheet, 4, 1, [[{ row: 1, col: 1, input: '合并', merge_rows: 2, merge_cols: 2 }]])
+  assert.equal(sheet.row_count, 5)
+  assert.equal(sheet.col_count, 3)
+  const cell = findCell(sheet, 4, 1)
+  assert.equal(cell.input, '合并')
+  assert.equal(cell.merge_rows, 2)
+  assert.equal(cell.merge_cols, 2)
+  assert.ok(cell.row + cell.merge_rows - 1 <= sheet.row_count)
+  assert.ok(cell.col + cell.merge_cols - 1 <= sheet.col_count)
+})
+
+test('a merge pasted on the last row stays inside the grid limit', () => {
+  const sheet = { row_count: MAX_ROWS, col_count: 2, cells: [] }
+  pasteCells(sheet, MAX_ROWS, 1, [[{ row: 1, col: 1, input: '底', merge_rows: 2 }]])
+  assert.equal(sheet.row_count, MAX_ROWS)
+  const cell = findCell(sheet, MAX_ROWS, 1)
+  assert.equal(cell.input, '底')
+  assert.equal(cell.merge_rows, undefined)
+})
+
+test('arrow movement skips coordinates covered by a merge', () => {
+  const sheet = {
+    row_count: 4,
+    col_count: 4,
+    cells: [{ row: 1, col: 1, input: '合', merge_cols: 2, merge_rows: 2 }],
+  }
+  assert.deepEqual(stepCell(sheet, 1, 1, 0, 1), { row: 1, col: 3 })
+  assert.deepEqual(stepCell(sheet, 1, 3, 0, -1), { row: 1, col: 1 })
+  assert.deepEqual(stepCell(sheet, 1, 1, 1, 0), { row: 3, col: 1 })
+  assert.deepEqual(stepCell(sheet, 1, 1, 0, -1), { row: 1, col: 1 })
 })
 
 test('paste shifts formulas from their original cells', () => {
