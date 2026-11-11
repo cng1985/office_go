@@ -43,7 +43,7 @@ async function load() {
   draft.value = structuredClone(asDraft(doc.value.kind, result.data.content))
   saved.value = JSON.stringify({ title: doc.value.title, content: draft.value })
   status.value = '已保存到云端'
-  drawer.value = doc.value.kind !== 'word'
+  drawer.value = doc.value.kind !== 'word' && doc.value.kind !== 'ppt'
   await loadVersions()
 }
 
@@ -178,8 +178,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 <template>
   <p class="error" v-if="!doc && error" style="margin: 24px">{{ error }}</p>
-  <div class="editor-shell" :class="{ 'word-mode': doc.kind === 'word' }" v-if="doc && draft">
-    <header class="editor-bar">
+  <div class="editor-shell" :class="{ 'word-mode': doc.kind === 'word', 'ppt-mode': doc.kind === 'ppt' }" v-if="doc && draft">
+    <header class="editor-bar" v-if="doc.kind !== 'ppt'">
       <router-link v-if="doc.kind === 'word'" class="word-back" to="/" aria-label="返回">‹</router-link>
       <router-link v-else class="brand" to="/"><span class="brand-mark">笺</span></router-link>
       <span v-if="doc.kind === 'word'" class="word-doc-icon" aria-hidden="true">W</span>
@@ -203,12 +203,29 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <WordEditor v-else-if="doc.kind === 'word'" :model-value="preview.content" readonly />
         <ExcelEditor v-else-if="doc.kind === 'excel' && !preview" v-model="draft" />
         <ExcelEditor v-else-if="doc.kind === 'excel'" :model-value="excelPreview" readonly />
-        <PptEditor v-else-if="!preview" v-model="draft" />
-        <PptEditor v-else :model-value="preview.content" readonly />
+        <PptEditor
+          v-else-if="!preview"
+          v-model="draft"
+          :title="doc.title"
+          :status="status"
+          :pending="pending"
+          @update:title="doc.title = $event"
+          @save="save"
+          @versions="drawer = !drawer"
+        />
+        <PptEditor
+          v-else
+          :model-value="preview.content"
+          :title="doc.title"
+          :status="status"
+          readonly
+          previewing
+          @versions="drawer = !drawer"
+        />
       </section>
       <aside class="drawer" v-if="drawer" data-testid="version-drawer">
         <h3>版本记录</h3>
-        <input v-if="doc.kind === 'word'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
+        <input v-if="doc.kind === 'word' || doc.kind === 'ppt'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
         <p class="muted">恢复会新增一个版本，不会抹掉后来的历史。</p>
         <button
           v-for="item in versions"

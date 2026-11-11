@@ -53,16 +53,16 @@ export function slideLayout(layout, ids) {
     return {
       background: '#ffffff',
       elements: [
-        textElement(titleId, { x: 64, y: 36, w: 832, h: 78, text: '单击编辑标题', font_size: 36, color: '#1c1915', bold: true, align: 'left' }),
-        textElement(bodyId, { x: 64, y: 140, w: 832, h: 340, text: '单击编辑正文', font_size: 22, color: '#1c1915', bold: false, align: 'left' }),
+        textElement(titleId, { x: 64, y: 36, w: 832, h: 78, text: '点击可添加标题', font_size: 36, color: '#202124', bold: true, align: 'left' }),
+        textElement(bodyId, { x: 64, y: 140, w: 832, h: 340, text: '点击可添加正文', font_size: 22, color: '#202124', bold: false, align: 'left' }),
       ],
     }
   }
   return {
     background: '#ffffff',
     elements: [
-      textElement(titleId, { x: 72, y: 168, w: 816, h: 96, text: '单击编辑标题', font_size: 44, color: '#1c1915', bold: true, align: 'left' }),
-      textElement(bodyId, { x: 72, y: 280, w: 760, h: 56, text: '单击编辑副标题', font_size: 22, color: '#6b6258', bold: false, align: 'left' }),
+      textElement(titleId, { x: 68, y: 132, w: 824, h: 92, text: '点击可添加标题', font_size: 40, color: '#202124', bold: true, align: 'center' }),
+      textElement(bodyId, { x: 68, y: 228, w: 824, h: 68, text: '点击可添加副标题', font_size: 22, color: '#5f6368', bold: false, align: 'center' }),
     ],
   }
 }
