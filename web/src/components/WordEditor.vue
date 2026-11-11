@@ -3,7 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   applyStyle,
   clearRuns,
+  clampFindIndex,
   clipboardToLines,
+  collapseBackward,
   findHits,
   listMarker,
   mergeRuns,
@@ -549,20 +551,11 @@ function splitBlock(index) {
   })
 }
 function mergeBackward(index) {
-  const previous = props.modelValue.blocks[index - 1]
-  const current = props.modelValue.blocks[index]
-  if (!previous || previous.type === 'break') {
-    props.modelValue.blocks.splice(index, 1)
-    touch()
-    nextTick(() => focusBlock(Math.max(0, index - 1)))
-    return
-  }
-  const offset = plainText(previous.runs).length
-  previous.runs = mergeRuns([...previous.runs, ...current.runs])
-  props.modelValue.blocks.splice(index, 1)
+  const result = collapseBackward(props.modelValue.blocks, index)
+  if (!result) return
   touch()
-  nextTick(() => paint(index - 1, offset))
-  active.value = index - 1
+  nextTick(() => paint(result.index, result.offset))
+  active.value = result.index
 }
 function onKey(index, event) {
   if (props.readonly) return
@@ -737,15 +730,20 @@ function showHit(hit) {
 }
 function findNext(step = 1) {
   const list = hits.value
-  if (!list.length) return
-  if (findAt.value < 0 || step === 0) findAt.value = Math.max(0, findAt.value)
+  if (!list.length) {
+    findAt.value = -1
+    return
+  }
+  if (step === 0 || findAt.value < 0) findAt.value = clampFindIndex(findAt.value, list.length)
   else findAt.value = (findAt.value + step + list.length) % list.length
   showHit(list[findAt.value])
 }
 function replaceCurrent() {
   const list = hits.value
   if (!list.length || props.readonly) return
-  const hit = list[Math.max(0, findAt.value)]
+  const index = clampFindIndex(findAt.value, list.length)
+  findAt.value = index
+  const hit = list[index]
   checkpoint()
   const block = props.modelValue.blocks[hit.block]
   block.runs = replaceOnce(block.runs, hit.start, hit.end, replaceQuery.value)

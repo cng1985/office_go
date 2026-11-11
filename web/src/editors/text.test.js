@@ -3,7 +3,9 @@ import test from 'node:test'
 import {
   applyMark,
   applyStyle,
+  clampFindIndex,
   clipboardToLines,
+  collapseBackward,
   findHits,
   listMarker,
   plainText,
@@ -54,6 +56,36 @@ test('styles, lists and find follow the edited range', () => {
   assert.equal(listMarker(blocks, 3), '1.')
   assert.deepEqual(findHits(blocks, '乙'), [{ block: 3, start: 0, end: 1 }])
   assert.equal(plainText(replaceOnce(blocks[0].runs, 0, 1, '丙')), '丙')
+})
+
+test('page break backspace keeps the following paragraph', () => {
+  const blocks = [
+    { id: 'a', type: 'paragraph', align: 'left', runs: [{ text: '上文' }] },
+    { id: 'b', type: 'break', align: 'left', runs: [{ text: '' }] },
+    { id: 'c', type: 'paragraph', align: 'left', runs: [{ text: '还在' }] },
+  ]
+  const result = collapseBackward(blocks, 2)
+  assert.equal(result.index, 1)
+  assert.equal(blocks.length, 2)
+  assert.equal(plainText(blocks[1].runs), '还在')
+  assert.equal(blocks.some((block) => block.type === 'break'), false)
+})
+
+test('a sans-serif stack is not stored as a serif font', () => {
+  const sans = elementNode('DIV', [
+    elementNode('SPAN', [textNode('黑体')], { fontFamily: '"PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif' }),
+  ])
+  const serif = elementNode('DIV', [
+    elementNode('SPAN', [textNode('宋体')], { fontFamily: '"Songti SC", "STSong", serif' }),
+  ])
+  assert.equal(segmentsFromElement(sans)[0][0].font, 'sans')
+  assert.equal(segmentsFromElement(serif)[0][0].font, 'serif')
+})
+
+test('find index stays inside the remaining matches', () => {
+  assert.equal(clampFindIndex(2, 2), 1)
+  assert.equal(clampFindIndex(-1, 3), 0)
+  assert.equal(clampFindIndex(0, 0), -1)
 })
 
 test('soft breaks and pasted blocks become separate paragraphs', () => {

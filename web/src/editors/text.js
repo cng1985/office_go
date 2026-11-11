@@ -106,6 +106,27 @@ export function replaceOnce(runs, start, end, replacement) {
   ])
 }
 
+export function clampFindIndex(index, count) {
+  if (count <= 0) return -1
+  if (index < 0) return 0
+  return Math.min(index, count - 1)
+}
+
+// 段首退格：前面是分页符时只删分页符，段落文字留在原地；否则并入上一段。
+export function collapseBackward(blocks, index) {
+  const previous = blocks[index - 1]
+  const current = blocks[index]
+  if (!previous || !current) return null
+  if (previous.type === 'break') {
+    blocks.splice(index - 1, 1)
+    return { index: index - 1, offset: 0 }
+  }
+  const offset = plainText(previous.runs).length
+  previous.runs = mergeRuns([...(previous.runs || []), ...(current.runs || [])])
+  blocks.splice(index, 1)
+  return { index: index - 1, offset }
+}
+
 export function findHits(blocks, query) {
   const needle = String(query || '')
   if (!needle) return []
@@ -225,8 +246,8 @@ function fontKey(family) {
   const value = String(family || '').toLowerCase()
   if (!value) return ''
   if (value.includes('mono') || value.includes('courier') || value.includes('consolas')) return 'mono'
+  if (value.includes('sans-serif') || value.includes('sans') || value.includes('avenir') || value.includes('pingfang') || value.includes('yahei')) return 'sans'
   if (value.includes('songti') || value.includes('palatino') || value.includes('serif')) return 'serif'
-  if (value.includes('sans') || value.includes('avenir') || value.includes('pingfang')) return 'sans'
   return ''
 }
 
