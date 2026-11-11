@@ -149,6 +149,16 @@ func TestExcelCanonicalAcceptsLegacySheet(t *testing.T) {
 	if _, err := Canonical(KindExcel, []byte(`{"sheets":[{"name":"Sheet1","row_count":40,"col_count":16,"cells":[{"row":1,"col":1,"input":"1","extra":true}]}]}`)); err == nil {
 		t.Fatal("unknown cell field should fail")
 	}
+	styled, err := Canonical(KindExcel, []byte(`{"sheets":[{"name":"工作表1","row_count":4,"col_count":3,"cells":[{"row":1,"col":1,"input":"12.5","format":"currency","decimals":0,"strike":true,"font":"sans","size":10,"border":"bottom","valign":"top","note":"备注","merge_rows":2,"merge_cols":2}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(styled, []byte(`"decimals":0`)) || !bytes.Contains(styled, []byte(`"format":"currency"`)) || !bytes.Contains(styled, []byte(`"merge_rows":2`)) {
+		t.Fatalf("styled = %s", styled)
+	}
+	if _, err := Canonical(KindExcel, []byte(`{"sheets":[{"name":"工作表1","row_count":4,"col_count":3,"cells":[{"row":1,"col":1,"input":"1","decimals":9}]}]}`)); err == nil {
+		t.Fatal("decimals should fail")
+	}
 }
 
 func TestWordAndPPTFormatting(t *testing.T) {

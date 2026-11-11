@@ -6,7 +6,11 @@ export const MAX_SHEETS = 20
 export const MAX_INPUT = 2000
 
 const ALIGNS = new Set(['left', 'center', 'right'])
-const FORMATS = new Set(['number', 'percent', 'date', 'text'])
+const VALIGNS = new Set(['top', 'middle', 'bottom'])
+const FORMATS = new Set(['number', 'percent', 'currency', 'date', 'text'])
+const FONTS = new Set(['serif', 'sans', 'mono'])
+const BORDERS = new Set(['bottom', 'all', 'outer'])
+export const STYLE_KEYS = ['bold', 'italic', 'underline', 'strike', 'align', 'valign', 'format', 'color', 'fill', 'font', 'size', 'wrap', 'border', 'rotate', 'decimals']
 
 export function normalizeWorkbook(content) {
   const source = content && typeof content === 'object' ? content : {}
@@ -79,6 +83,7 @@ export function shiftFormula(input, deltaRow, deltaCol) {
 
 export function insertRows(sheet, at, count = 1, workbook = null) {
   if (sheet.row_count + count > MAX_ROWS) return false
+  releaseMerges(sheet, 'row', at, count, 'insert')
   sheet.row_count += count
   for (const cell of sheet.cells) {
     if (cell.row >= at) cell.row += count
@@ -90,6 +95,7 @@ export function insertRows(sheet, at, count = 1, workbook = null) {
 
 export function deleteRows(sheet, at, count = 1, workbook = null) {
   if (sheet.row_count - count < 1) return false
+  releaseMerges(sheet, 'row', at, count, 'delete')
   sheet.cells = sheet.cells.filter((cell) => cell.row < at || cell.row >= at + count)
   for (const cell of sheet.cells) {
     if (cell.row >= at + count) cell.row -= count
@@ -102,6 +108,7 @@ export function deleteRows(sheet, at, count = 1, workbook = null) {
 
 export function insertCols(sheet, at, count = 1, workbook = null) {
   if (sheet.col_count + count > MAX_COLS) return false
+  releaseMerges(sheet, 'col', at, count, 'insert')
   if (Array.isArray(sheet.col_widths) && sheet.col_widths.length) {
     const widths = sheet.col_widths.slice()
     while (widths.length < sheet.col_count) widths.push(0)
@@ -119,6 +126,7 @@ export function insertCols(sheet, at, count = 1, workbook = null) {
 
 export function deleteCols(sheet, at, count = 1, workbook = null) {
   if (sheet.col_count - count < 1) return false
+  releaseMerges(sheet, 'col', at, count, 'delete')
   if (Array.isArray(sheet.col_widths) && sheet.col_widths.length) {
     const widths = sheet.col_widths.slice()
     while (widths.length < sheet.col_count) widths.push(0)
@@ -319,16 +327,55 @@ function normalizeStoredCell(raw) {
   if (raw.bold) cell.bold = true
   if (raw.italic) cell.italic = true
   if (raw.underline) cell.underline = true
+  if (raw.strike) cell.strike = true
   if (ALIGNS.has(raw.align)) cell.align = raw.align
+  if (VALIGNS.has(raw.valign)) cell.valign = raw.valign
   if (FORMATS.has(raw.format)) cell.format = raw.format
+  if (FONTS.has(raw.font)) cell.font = raw.font
   if (isColor(raw.color)) cell.color = String(raw.color).toLowerCase()
   if (isColor(raw.fill)) cell.fill = String(raw.fill).toLowerCase()
+  const size = Number(raw.size)
+  if (Number.isInteger(size) && size >= 6 && size <= 72) cell.size = size
+  if (raw.wrap) cell.wrap = true
+  if (BORDERS.has(raw.border)) cell.border = raw.border
+  if (raw.rotate === 'v') cell.rotate = 'v'
+  const decimals = Number(raw.decimals)
+  if (Number.isInteger(decimals) && decimals >= 0 && decimals <= 6 && raw.decimals !== '' && raw.decimals != null) cell.decimals = decimals
+  const note = String(raw.note || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, 500)
+  if (note) cell.note = note
+  const mergeRows = Number(raw.merge_rows) || 1
+  const mergeCols = Number(raw.merge_cols) || 1
+  if (mergeRows >= 1 && mergeCols >= 1 && (mergeRows > 1 || mergeCols > 1) && raw.row + mergeRows - 1 <= MAX_ROWS && raw.col + mergeCols - 1 <= MAX_COLS) {
+    if (mergeRows > 1) cell.merge_rows = mergeRows
+    if (mergeCols > 1) cell.merge_cols = mergeCols
+  }
   if (!cellHasContent(cell)) return null
   return cell
 }
 
 function cellHasContent(cell) {
-  return Boolean(cell.input || cell.bold || cell.italic || cell.underline || cell.align || cell.format || cell.color || cell.fill)
+  return Boolean(
+    cell.input || cell.bold || cell.italic || cell.underline || cell.strike || cell.align || cell.valign
+    || cell.format || cell.color || cell.fill || cell.font || cell.size || cell.wrap || cell.border
+    || cell.rotate || cell.note || Number.isInteger(cell.decimals) || cell.merge_rows || cell.merge_cols,
+  )
+}
+
+function releaseMerges(sheet, axis, at, count, mode) {
+  for (const cell of sheet.cells || []) {
+    const spanRow = cell.merge_rows || 1
+    const spanCol = cell.merge_cols || 1
+    if (spanRow === 1 && spanCol === 1) continue
+    const start = axis === 'row' ? cell.row : cell.col
+    const span = axis === 'row' ? spanRow : spanCol
+    const end = start + span - 1
+    const hit = mode === 'insert'
+      ? at > start && at <= end
+      : !(end < at || start > at + count - 1)
+    if (!hit) continue
+    delete cell.merge_rows
+    delete cell.merge_cols
+  }
 }
 
 function normalizeWidths(widths, cols) {
@@ -444,7 +491,11 @@ function numericSeries(sheet, from, to, fixed, axis) {
 function putNumber(sheet, row, col, value, style) {
   const input = String(Math.round(value * 1e10) / 1e10)
   const next = { row, col, input }
-  for (const key of ['bold', 'italic', 'underline', 'align', 'format', 'color', 'fill']) {
+  for (const key of STYLE_KEYS) {
+    if (key === 'decimals') {
+      if (Number.isInteger(style?.decimals)) next.decimals = style.decimals
+      continue
+    }
     if (style?.[key]) next[key] = style[key]
   }
   putCell(sheet, next)

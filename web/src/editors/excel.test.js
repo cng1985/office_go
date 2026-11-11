@@ -152,6 +152,47 @@ test('fill continues a numeric series and shifts relative formulas', () => {
   assert.equal(shiftFormula('=A1', 1, 0), '=A2')
 })
 
+test('cell formatting and merges are kept', () => {
+  const workbook = normalizeWorkbook({
+    sheets: [{
+      name: '工作表1',
+      row_count: 4,
+      col_count: 3,
+      cells: [{
+        row: 1,
+        col: 1,
+        input: '12.5',
+        bold: false,
+        strike: true,
+        format: 'currency',
+        decimals: 0,
+        font: 'sans',
+        size: 10,
+        border: 'bottom',
+        valign: 'top',
+        note: ' 备注 ',
+        merge_rows: 2,
+        merge_cols: 2,
+      }],
+    }],
+  })
+  assert.deepEqual(workbook.sheets[0].cells[0], {
+    row: 1,
+    col: 1,
+    input: '12.5',
+    strike: true,
+    format: 'currency',
+    decimals: 0,
+    font: 'sans',
+    size: 10,
+    border: 'bottom',
+    valign: 'top',
+    note: '备注',
+    merge_rows: 2,
+    merge_cols: 2,
+  })
+})
+
 test('paste shifts formulas from their original cells', () => {
   const sheet = { row_count: 6, col_count: 4, cells: [] }
   pasteCells(sheet, 3, 2, [[{ row: 1, col: 1, input: '=B2+$C$3' }]])
