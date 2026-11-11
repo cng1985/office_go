@@ -68,10 +68,21 @@ type excelCell struct {
 	Bold      bool   `json:"bold,omitempty"`
 	Italic    bool   `json:"italic,omitempty"`
 	Underline bool   `json:"underline,omitempty"`
+	Strike    bool   `json:"strike,omitempty"`
 	Align     string `json:"align,omitempty"`
+	Valign    string `json:"valign,omitempty"`
 	Color     string `json:"color,omitempty"`
 	Fill      string `json:"fill,omitempty"`
 	Format    string `json:"format,omitempty"`
+	Font      string `json:"font,omitempty"`
+	Size      int    `json:"size,omitempty"`
+	Wrap      bool   `json:"wrap,omitempty"`
+	Border    string `json:"border,omitempty"`
+	Rotate    string `json:"rotate,omitempty"`
+	Note      string `json:"note,omitempty"`
+	Decimals  *int   `json:"decimals,omitempty"`
+	MergeRows int    `json:"merge_rows,omitempty"`
+	MergeCols int    `json:"merge_cols,omitempty"`
 }
 
 type pptContent struct {
@@ -151,7 +162,7 @@ func Blank(kind string) ([]byte, error) {
 	case KindWord:
 		return Canonical(kind, []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"","bold":false,"italic":false,"underline":false}]}]}`))
 	case KindExcel:
-		return Canonical(kind, []byte(`{"sheets":[{"name":"Sheet1","row_count":40,"col_count":16,"cells":[]}]}`))
+		return Canonical(kind, []byte(`{"sheets":[{"name":"工作表1","row_count":50,"col_count":26,"cells":[]}]}`))
 	case KindPPT:
 		return Canonical(kind, []byte(`{"slides":[{"id":"s1","background":"#fffdf8","elements":[{"id":"e1","kind":"text","x":72,"y":168,"w":816,"h":96,"text":"单击编辑标题","font_size":44,"color":"#1c1915","bold":true,"align":"left"},{"id":"e2","kind":"text","x":72,"y":280,"w":760,"h":56,"text":"单击编辑副标题","font_size":22,"color":"#6b6258","bold":false,"align":"left"}]}]}`))
 	default:
@@ -369,8 +380,50 @@ func validateSheet(sheet *excelSheet, names map[string]struct{}) error {
 		if cell.Align != "" && cell.Align != "left" && cell.Align != "center" && cell.Align != "right" {
 			return apperrors.BadRequest(400, "单元格对齐无效")
 		}
-		if cell.Format != "" && cell.Format != "number" && cell.Format != "percent" && cell.Format != "date" && cell.Format != "text" {
+		if cell.Valign != "" && cell.Valign != "top" && cell.Valign != "middle" && cell.Valign != "bottom" {
+			return apperrors.BadRequest(400, "单元格垂直对齐无效")
+		}
+		if cell.Format != "" && cell.Format != "number" && cell.Format != "percent" && cell.Format != "currency" && cell.Format != "date" && cell.Format != "text" {
 			return apperrors.BadRequest(400, "单元格格式无效")
+		}
+		if cell.Font != "" && cell.Font != "serif" && cell.Font != "sans" && cell.Font != "mono" {
+			return apperrors.BadRequest(400, "单元格字体无效")
+		}
+		if cell.Size != 0 && (cell.Size < 6 || cell.Size > 72) {
+			return apperrors.BadRequest(400, "单元格字号无效")
+		}
+		if cell.Border != "" && cell.Border != "bottom" && cell.Border != "all" && cell.Border != "outer" {
+			return apperrors.BadRequest(400, "单元格边框无效")
+		}
+		if cell.Rotate != "" && cell.Rotate != "v" {
+			return apperrors.BadRequest(400, "单元格方向无效")
+		}
+		cell.Note = strings.TrimSpace(cell.Note)
+		if utf8.RuneCountInString(cell.Note) > 500 || hasControl(cell.Note, true) {
+			return apperrors.BadRequest(400, "单元格批注无效")
+		}
+		if cell.Decimals != nil && (*cell.Decimals < 0 || *cell.Decimals > 6) {
+			return apperrors.BadRequest(400, "小数位数无效")
+		}
+		if cell.MergeRows < 0 || cell.MergeCols < 0 {
+			return apperrors.BadRequest(400, "合并区域无效")
+		}
+		if cell.MergeRows <= 1 {
+			cell.MergeRows = 0
+		}
+		if cell.MergeCols <= 1 {
+			cell.MergeCols = 0
+		}
+		spanRow := cell.MergeRows
+		if spanRow == 0 {
+			spanRow = 1
+		}
+		spanCol := cell.MergeCols
+		if spanCol == 0 {
+			spanCol = 1
+		}
+		if cell.Row+spanRow-1 > sheet.RowCount || cell.Col+spanCol-1 > sheet.ColCount {
+			return apperrors.BadRequest(400, "合并区域无效")
 		}
 		if cell.Color != "" && !colorPattern.MatchString(cell.Color) {
 			return apperrors.BadRequest(400, "单元格颜色无效")
@@ -378,7 +431,7 @@ func validateSheet(sheet *excelSheet, names map[string]struct{}) error {
 		if cell.Fill != "" && !colorPattern.MatchString(cell.Fill) {
 			return apperrors.BadRequest(400, "单元格填充无效")
 		}
-		if cell.Input == "" && !cell.Bold && !cell.Italic && !cell.Underline && cell.Align == "" && cell.Color == "" && cell.Fill == "" && cell.Format == "" {
+		if cell.Input == "" && !cell.Bold && !cell.Italic && !cell.Underline && !cell.Strike && !cell.Wrap && cell.Align == "" && cell.Valign == "" && cell.Color == "" && cell.Fill == "" && cell.Format == "" && cell.Font == "" && cell.Size == 0 && cell.Border == "" && cell.Rotate == "" && cell.Note == "" && cell.Decimals == nil && cell.MergeRows == 0 && cell.MergeCols == 0 {
 			continue
 		}
 		kept = append(kept, cell)

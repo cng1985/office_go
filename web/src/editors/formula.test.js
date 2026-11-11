@@ -6,6 +6,17 @@ function model(cells) {
   return { cells }
 }
 
+test('currency percent and fixed decimals', () => {
+  const sheet = model([
+    { row: 1, col: 1, input: '1234.5', format: 'currency', decimals: 2 },
+    { row: 1, col: 2, input: '0.256', format: 'percent', decimals: 1 },
+    { row: 1, col: 3, input: '-8', format: 'currency' },
+  ])
+  assert.equal(displayCell(sheet, 1, 1), '¥1,234.50')
+  assert.equal(displayCell(sheet, 1, 2), '25.6%')
+  assert.equal(displayCell(sheet, 1, 3), '-¥8.00')
+})
+
 test('arithmetic and cell references', () => {
   const sheet = model([
     { row: 1, col: 1, input: '2' },
