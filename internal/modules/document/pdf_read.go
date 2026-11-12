@@ -565,7 +565,15 @@ func inflatePDF(data []byte) ([]byte, error) {
 		return nil, errPDFSyntax
 	}
 	defer reader.Close()
-	out, err := io.ReadAll(reader)
+	limit := expansionLimit(len(data))
+	readCap := limit
+	if readCap < math.MaxInt64 {
+		readCap++
+	}
+	out, err := io.ReadAll(io.LimitReader(reader, readCap))
+	if int64(len(out)) > limit {
+		return nil, errPDFLimit
+	}
 	if err != nil {
 		return nil, errPDFSyntax
 	}
