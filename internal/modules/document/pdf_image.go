@@ -5,7 +5,10 @@ import (
 	"encoding/base64"
 	"image"
 	"image/color"
+	"image/draw"
+	_ "image/gif"
 	"image/jpeg"
+	_ "image/png"
 	"math"
 	"strings"
 
@@ -40,6 +43,28 @@ func imageFromPDFStream(obj pdfObj, raw []byte) []byte {
 	default:
 		return nil
 	}
+}
+
+func officeImageDataURL(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	if jpegBytes := fitJPEG(raw); len(jpegBytes) > 0 {
+		return jpegDataPrefix + base64.StdEncoding.EncodeToString(jpegBytes), true
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 8000 || cfg.Height > 8000 {
+		return "", false
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", false
+	}
+	jpegBytes := shrinkJPEG(img)
+	if len(jpegBytes) == 0 {
+		return "", false
+	}
+	return jpegDataPrefix + base64.StdEncoding.EncodeToString(jpegBytes), true
 }
 
 func fitJPEG(raw []byte) []byte {
@@ -283,8 +308,16 @@ func imageFromSamples(samples []byte, width, height, colors, bpc int) image.Imag
 	return nil
 }
 
+func onWhite(src image.Image) *image.RGBA {
+	bounds := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(dst, dst.Bounds(), src, bounds.Min, draw.Over)
+	return dst
+}
+
 func shrinkJPEG(img image.Image) []byte {
-	current := img
+	var current image.Image = onWhite(img)
 	for step := 0; step < 6; step++ {
 		var buf bytes.Buffer
 		if err := jpeg.Encode(&buf, current, &jpeg.Options{Quality: 75}); err != nil {
