@@ -186,8 +186,42 @@ function refreshAll() {
 }
 function focusPage(event) {
   if (props.readonly || event.target.closest('.word-block, .word-suggest, button')) return
-  const index = Math.max(0, props.modelValue.blocks.findIndex((block) => block.type !== 'break' && block.type !== 'image'))
+  const image = event.target.closest('.word-image')
+  if (image) {
+    event.preventDefault()
+    selectImage(Number(image.dataset.blockIndex), image)
+    return
+  }
+  const index = blockAt(event.currentTarget, event.clientY)
+  const block = props.modelValue.blocks[index]
+  if (!block || block.type === 'break') return
+  if (block.type === 'image') {
+    event.preventDefault()
+    selectImage(index, event.currentTarget.querySelector(`.word-image[data-block-index="${index}"]`))
+    return
+  }
   focusBlock(index)
+}
+function selectImage(index, node) {
+  if (!Number.isInteger(index) || index < 0) return
+  active.value = index
+  typingStyle.value = null
+  ui.value += 1
+  node?.focus({ preventScroll: true })
+}
+function blockAt(page, clientY) {
+  const rows = [...page.querySelectorAll('.word-image, .word-line')]
+  let best = -1
+  let distance = Infinity
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect()
+    const delta = clientY < rect.top ? rect.top - clientY : clientY > rect.bottom ? clientY - rect.bottom : 0
+    if (delta < distance) {
+      distance = delta
+      best = Number(row.dataset.blockIndex)
+    }
+  }
+  return best
 }
 function focusBlock(index) {
   active.value = index
@@ -1097,6 +1131,7 @@ watch(() => props.modelValue, refreshAll)
                   class="word-image"
                   :class="{ active: active === index }"
                   :data-align="block.align || 'left'"
+                  :data-block-index="index"
                   data-testid="pdf-image"
                   tabindex="0"
                   @focus="active = index"
@@ -1112,6 +1147,7 @@ watch(() => props.modelValue, refreshAll)
                   class="word-line"
                   :class="{ 'with-suggest': blank && index === 0 && !readonly }"
                   :data-align="block.align || 'left'"
+                  :data-block-index="index"
                   :style="{ '--indent': block.indent || 0 }"
                 >
                   <span class="marker" v-if="listMarker(modelValue.blocks, index)">{{ listMarker(modelValue.blocks, index) }}</span>
