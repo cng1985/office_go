@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"image"
 	"image/color"
+	_ "image/gif"
 	"image/jpeg"
+	_ "image/png"
 	"math"
 	"strings"
 
@@ -40,6 +42,28 @@ func imageFromPDFStream(obj pdfObj, raw []byte) []byte {
 	default:
 		return nil
 	}
+}
+
+func officeImageDataURL(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	if jpegBytes := fitJPEG(raw); len(jpegBytes) > 0 {
+		return jpegDataPrefix + base64.StdEncoding.EncodeToString(jpegBytes), true
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 8000 || cfg.Height > 8000 {
+		return "", false
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", false
+	}
+	jpegBytes := shrinkJPEG(img)
+	if len(jpegBytes) == 0 {
+		return "", false
+	}
+	return jpegDataPrefix + base64.StdEncoding.EncodeToString(jpegBytes), true
 }
 
 func fitJPEG(raw []byte) []byte {

@@ -8,6 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"strings"
 	"testing"
 )
@@ -449,6 +453,128 @@ func TestLongWordDocumentImports(t *testing.T) {
 	if _, _, _, err = ImportFile("过长.docx", wordParagraphs(t, maxWordBlocks+1)); err == nil || !strings.Contains(err.Error(), "文稿段落过多") {
 		t.Fatal(err)
 	}
+}
+
+func TestWordImagesImportAndRoundTrip(t *testing.T) {
+	pngBytes := solidPNG(t, color.RGBA{R: 220, G: 30, B: 30, A: 255})
+	jpegBytes := solidJPEG(t, color.RGBA{R: 20, G: 80, B: 200, A: 255})
+	document := officeXMLHeader + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body>` +
+		`<w:p><w:r><w:t>前文</w:t></w:r></w:p>` +
+		`<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>图前</w:t></w:r><w:r><w:drawing><a:blip r:embed="rId1"/><a:p><a:r><a:t>形状里</a:t></a:r></a:p></w:drawing></w:r><w:r><w:t>图后</w:t></w:r></w:p>` +
+		`<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><a:blip r:embed="rId2"/></w:drawing></mc:Choice><mc:Fallback><w:pict><v:imagedata r:id="rId2"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>` +
+		`<w:p><w:r><w:t>结尾</w:t></w:r></w:p>` +
+		`</w:body></w:document>`
+	rels := officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+		`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>` +
+		`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image2.jpg"/>` +
+		`<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>` +
+		`</Relationships>`
+	header := officeXMLHeader + `<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:p><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p></w:hdr>`
+	headerRels := officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>`
+	body, err := packZip(map[string]string{
+		"word/document.xml":            document,
+		"word/_rels/document.xml.rels": rels,
+		"word/header1.xml":             header,
+		"word/_rels/header1.xml.rels":  headerRels,
+		"word/media/image1.png":        string(pngBytes),
+		"word/media/image2.jpg":        string(jpegBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind, _, content, err := ImportFile("带图.docx", body)
+	if err != nil || kind != KindWord {
+		t.Fatal(err)
+	}
+	var doc wordContent
+	if err := json.Unmarshal(content, &doc); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(doc.Blocks))
+	images := 0
+	for _, block := range doc.Blocks {
+		if block.Type == "image" {
+			images++
+			if !strings.HasPrefix(block.Image, jpegDataPrefix) {
+				t.Fatalf("image block = %#v", block)
+			}
+			if images == 2 && block.Align != "center" {
+				t.Fatalf("image align = %s", block.Align)
+			}
+			got = append(got, "image")
+			continue
+		}
+		got = append(got, plainWord(block))
+	}
+	want := []string{"image", "前文", "图前", "image", "图后", "image", "结尾"}
+	if strings.Join(got, "|") != strings.Join(want, "|") || images != 3 || bytes.Contains(content, []byte("形状里")) {
+		t.Fatalf("blocks = %s", strings.Join(got, "|"))
+	}
+	exported, err := ExportFile(KindWord, "带图", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := readZip(exported.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(parts["word/document.xml"], []byte(`r:embed="rId3"`)) || len(parts["word/media/image1.jpeg"]) == 0 || len(parts["word/media/image3.jpeg"]) == 0 {
+		t.Fatalf("exported images missing: %s", parts["word/document.xml"])
+	}
+	_, _, again, err := ImportFile("带图.docx", exported.Body)
+	if err != nil || bytes.Count(again, []byte(`"type":"image"`)) != 3 || !bytes.Contains(again, []byte("前文")) || !bytes.Contains(again, []byte("图后")) {
+		t.Fatalf("round trip = %s %v", again, err)
+	}
+
+	missing, err := packZip(map[string]string{
+		"word/document.xml":            officeXMLHeader + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>还有文字</w:t></w:r><w:r><w:drawing><a:blip r:embed="rId9"/></w:drawing></w:r></w:p></w:body></w:document>`,
+		"word/_rels/document.xml.rels": officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/gone.png"/></Relationships>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, textOnly, err := ImportFile("缺图.docx", missing)
+	if err != nil || !bytes.Contains(textOnly, []byte("还有文字")) || bytes.Contains(textOnly, []byte(`"type":"image"`)) {
+		t.Fatalf("missing media = %s %v", textOnly, err)
+	}
+}
+
+func solidPNG(t *testing.T, c color.RGBA) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 12, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 12; x++ {
+			img.SetRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func solidJPEG(t *testing.T, c color.RGBA) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 12, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 12; x++ {
+			img.SetRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func plainWord(block wordBlock) string {
+	var b strings.Builder
+	for _, run := range block.Runs {
+		b.WriteString(run.Text)
+	}
+	return b.String()
 }
 
 func TestWordFallbackIsNotImported(t *testing.T) {

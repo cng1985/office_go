@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
@@ -53,24 +55,74 @@ func exportDocx(canonical []byte) ([]byte, error) {
 	}
 	numIDs := listNumIDs(content.Blocks)
 	maxNumID := 2
+	var images [][]byte
+	for _, block := range content.Blocks {
+		if block.Type != "image" {
+			continue
+		}
+		raw, ok := jpegPayload(block.Image)
+		if ok {
+			images = append(images, raw)
+		}
+	}
 	var body strings.Builder
 	body.WriteString(officeXMLHeader)
-	body.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
+	body.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`)
+	if len(images) > 0 {
+		body.WriteString(` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"`)
+	}
+	body.WriteString(`><w:body>`)
+	imageNo := 0
 	for i, block := range content.Blocks {
 		if numIDs[i] > maxNumID {
 			maxNumID = numIDs[i]
 		}
+		if block.Type == "image" {
+			if _, ok := jpegPayload(block.Image); !ok {
+				continue
+			}
+			imageNo++
+			writeWordImage(&body, block, imageNo)
+			continue
+		}
 		writeWordParagraph(&body, block, numIDs[i])
 	}
 	body.WriteString(`</w:body></w:document>`)
-	return packZip(map[string]string{
-		"[Content_Types].xml":          wordContentTypes,
+	files := map[string]string{
+		"[Content_Types].xml":          wordContentTypesXML(len(images) > 0),
 		"_rels/.rels":                  wordRootRels,
 		"word/document.xml":            body.String(),
-		"word/_rels/document.xml.rels": wordDocumentRels,
+		"word/_rels/document.xml.rels": wordDocumentRelsXML(len(images)),
 		"word/styles.xml":              wordStyles,
 		"word/numbering.xml":           wordNumberingXML(maxNumID),
-	})
+	}
+	for i, data := range images {
+		files[fmt.Sprintf("word/media/image%d.jpeg", i+1)] = string(data)
+	}
+	return packZip(files)
+}
+
+func wordContentTypesXML(withJPEG bool) string {
+	if !withJPEG {
+		return wordContentTypes
+	}
+	return strings.Replace(wordContentTypes, `<Default Extension="rels"`, `<Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="rels"`, 1)
+}
+
+func wordDocumentRelsXML(imageCount int) string {
+	if imageCount == 0 {
+		return wordDocumentRels
+	}
+	var body strings.Builder
+	body.WriteString(officeXMLHeader)
+	body.WriteString(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`)
+	body.WriteString(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`)
+	body.WriteString(`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`)
+	for i := 1; i <= imageCount; i++ {
+		fmt.Fprintf(&body, `<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image%d.jpeg"/>`, i+2, i)
+	}
+	body.WriteString(`</Relationships>`)
+	return body.String()
 }
 
 func listNumIDs(blocks []wordBlock) []int {
@@ -134,6 +186,42 @@ func writeWordParagraph(body *strings.Builder, block wordBlock, numID int) {
 		}
 	}
 	body.WriteString("</w:p>")
+}
+
+func writeWordImage(body *strings.Builder, block wordBlock, n int) {
+	raw, ok := jpegPayload(block.Image)
+	if !ok {
+		return
+	}
+	cx, cy := wordImageExtent(raw)
+	fmt.Fprintf(body, `<w:p><w:pPr><w:jc w:val="%s"/></w:pPr>`, wordAlignOut(block.Align))
+	fmt.Fprintf(body, `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="%d" cy="%d"/>`, cx, cy)
+	fmt.Fprintf(body, `<wp:docPr id="%d" name="Picture %d"/>`, n, n)
+	fmt.Fprintf(body, `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="%d" name="image%d.jpeg"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>`, n, n)
+	fmt.Fprintf(body, `<a:blip r:embed="rId%d"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`, n+2)
+	fmt.Fprintf(body, `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`, cx, cy)
+}
+
+func wordImageExtent(data []byte) (int, int) {
+	width, height, _, ok := jpegInfo(data)
+	if !ok {
+		return 5486400, 3200400
+	}
+	const emuPerPixel = 9525
+	const maxWidth = 5943600
+	cx := width * emuPerPixel
+	cy := height * emuPerPixel
+	if cx > maxWidth && cx > 0 {
+		cy = cy * maxWidth / cx
+		cx = maxWidth
+	}
+	if cx < emuPerPixel {
+		cx = emuPerPixel
+	}
+	if cy < emuPerPixel {
+		cy = emuPerPixel
+	}
+	return cx, cy
 }
 
 func writeWordRun(body *strings.Builder, run wordRun) {
@@ -228,9 +316,14 @@ func importDocx(filename string, body []byte) (string, string, []byte, error) {
 	if zipKind(files) != KindWord {
 		return "", "", nil, apperrors.BadRequest(400, "这个文件不是有效的文稿")
 	}
-	blocks, err := parseWordDocument(files["word/document.xml"])
+	blocks, err := parseWordDocument(files["word/document.xml"], wordImageParts(files))
 	if err != nil {
 		return "", "", nil, readFailure(err)
+	}
+	blocks = append(wordPartImages(files, "/header"), blocks...)
+	blocks = append(blocks, wordPartImages(files, "/footer")...)
+	for i := range blocks {
+		blocks[i].ID = idAt("b", i+1)
 	}
 	raw, err := json.Marshal(wordContent{Blocks: blocks})
 	if err != nil {
@@ -243,15 +336,121 @@ func importDocx(filename string, body []byte) (string, string, []byte, error) {
 	return KindWord, titleFromFilename(filename), canonical, nil
 }
 
+type wordImageAt struct {
+	at   int
+	data string
+}
+
 type wordDraft struct {
 	kind      string
 	align     string
 	indent    int
 	runs      []wordRun
 	pageBreak bool
+	image     string
+	images    []wordImageAt
 }
 
-func parseWordDocument(data []byte) ([]wordBlock, error) {
+func wordImageParts(files map[string][]byte) map[string]string {
+	return imagePartsFromRels(files, files["word/_rels/document.xml.rels"])
+}
+
+func imagePartsFromRels(files map[string][]byte, rels []byte) map[string]string {
+	if len(rels) == 0 {
+		return nil
+	}
+	images := map[string]string{}
+	_ = walkXML(rels, func(token xml.Token) error {
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "Relationship" {
+			return nil
+		}
+		id := attr(start, "Id")
+		if data, ok := wordImageURL(files, attr(start, "Target"), attr(start, "Type"), attr(start, "TargetMode")); ok {
+			images[id] = data
+		}
+		return nil
+	})
+	return images
+}
+
+func wordPartImages(files map[string][]byte, relType string) []wordBlock {
+	var blocks []wordBlock
+	_ = walkXML(files["word/_rels/document.xml.rels"], func(token xml.Token) error {
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "Relationship" || !strings.HasSuffix(attr(start, "Type"), relType) {
+			return nil
+		}
+		part := wordPartPath(attr(start, "Target"))
+		if part == "" {
+			return nil
+		}
+		relsPath := path.Join(path.Dir(part), "_rels", path.Base(part)+".rels")
+		parsed, err := parseWordDocument(files[part], imagePartsFromRels(files, files[relsPath]))
+		if err != nil {
+			return nil
+		}
+		for _, block := range parsed {
+			if block.Type == "image" {
+				blocks = append(blocks, block)
+			}
+		}
+		return nil
+	})
+	return blocks
+}
+
+func wordPartPath(target string) string {
+	target = strings.ReplaceAll(target, "\\", "/")
+	if decoded, err := url.PathUnescape(target); err == nil {
+		target = decoded
+	}
+	var name string
+	if strings.HasPrefix(target, "/") {
+		name = strings.TrimPrefix(path.Clean(target), "/")
+	} else {
+		name = path.Clean(path.Join("word", target))
+	}
+	if name == "." || strings.Contains(name, "..") {
+		return ""
+	}
+	return name
+}
+
+func wordImageURL(files map[string][]byte, target, typ, mode string) (string, bool) {
+	if !strings.HasSuffix(typ, "/image") || strings.EqualFold(mode, "External") {
+		return "", false
+	}
+	target = strings.ReplaceAll(target, "\\", "/")
+	if cut := strings.IndexAny(target, "?#"); cut >= 0 {
+		target = target[:cut]
+	}
+	if decoded, err := url.PathUnescape(target); err == nil {
+		target = decoded
+	}
+	var name string
+	if strings.HasPrefix(target, "/") {
+		name = strings.TrimPrefix(path.Clean(target), "/")
+	} else {
+		name = path.Clean(path.Join("word", target))
+	}
+	if name == "." || strings.Contains(name, "..") {
+		return "", false
+	}
+	raw := files[name]
+	if raw == nil {
+		want := strings.ToLower(name)
+		for key, value := range files {
+			if strings.ToLower(key) == want {
+				raw = value
+				break
+			}
+		}
+	}
+	return officeImageDataURL(raw)
+}
+
+func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, error) {
 	var drafts []wordDraft
 	var current *wordDraft
 	var run *wordRun
@@ -271,7 +470,28 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 			}
 			switch node.Name.Local {
 			case "p":
+				if !wordMain(node.Name) {
+					break
+				}
+				if current != nil {
+					drafts = append(drafts, *current)
+				}
 				current = &wordDraft{kind: "paragraph", align: "left"}
+			case "blip", "imagedata":
+				if current == nil {
+					current = &wordDraft{kind: "paragraph", align: "left"}
+				}
+				ref := attr(node, "embed")
+				if ref == "" {
+					ref = attr(node, "id")
+				}
+				if data := images[ref]; data != "" {
+					at := len(current.runs)
+					if text.Len() > 0 {
+						at++
+					}
+					current.images = append(current.images, wordImageAt{at: at, data: data})
+				}
 			case "pStyle":
 				if current != nil {
 					current.kind = wordStyleIn(attr(node, "val"))
@@ -285,6 +505,9 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 					current.indent = wordIndent(attr(node, "left"))
 				}
 			case "r":
+				if !wordMain(node.Name) {
+					break
+				}
 				run = &wordRun{}
 				text.Reset()
 			case "rPr":
@@ -342,6 +565,9 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 					text.WriteByte(' ')
 				}
 			case "t":
+				if !wordMain(node.Name) {
+					break
+				}
 				readingText = true
 			}
 		case xml.EndElement:
@@ -358,8 +584,13 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 					inRunProps--
 				}
 			case "t":
-				readingText = false
+				if wordMain(node.Name) {
+					readingText = false
+				}
 			case "r":
+				if !wordMain(node.Name) {
+					break
+				}
 				if current != nil && run != nil {
 					run.Text = text.String()
 					current.runs = append(current.runs, *run)
@@ -367,6 +598,9 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 				run = nil
 				text.Reset()
 			case "p":
+				if !wordMain(node.Name) {
+					break
+				}
 				if current != nil {
 					drafts = append(drafts, *current)
 				}
@@ -385,7 +619,10 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 	if err != nil {
 		return nil, err
 	}
-	blocks := expandWordDrafts(drafts)
+	if current != nil {
+		drafts = append(drafts, *current)
+	}
+	blocks := expandWordDrafts(flattenWordImages(drafts))
 	if len(blocks) == 0 {
 		blocks = []wordBlock{{
 			ID: "b1", Type: "paragraph", Align: "left",
@@ -398,9 +635,77 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 	return blocks, nil
 }
 
+func flattenWordImages(drafts []wordDraft) []wordDraft {
+	out := make([]wordDraft, 0, len(drafts))
+	for _, draft := range drafts {
+		out = append(out, splitDraftOnImages(draft)...)
+	}
+	return out
+}
+
+func splitDraftOnImages(draft wordDraft) []wordDraft {
+	if len(draft.images) == 0 {
+		return []wordDraft{draft}
+	}
+	pageBreak := draft.pageBreak
+	draft.pageBreak = false
+	var out []wordDraft
+	var runs []wordRun
+	next := 0
+	hasText := false
+	flushRuns := func() {
+		if len(runs) == 0 {
+			return
+		}
+		piece := draft
+		piece.runs = append([]wordRun(nil), runs...)
+		piece.images = nil
+		out = append(out, piece)
+		runs = nil
+	}
+	for i, run := range draft.runs {
+		for next < len(draft.images) && draft.images[next].at <= i {
+			flushRuns()
+			out = append(out, wordDraft{kind: "paragraph", align: draft.align, indent: draft.indent, image: draft.images[next].data})
+			next++
+		}
+		if run.Text == "" {
+			continue
+		}
+		hasText = true
+		runs = append(runs, run)
+	}
+	for next < len(draft.images) {
+		flushRuns()
+		out = append(out, wordDraft{kind: "paragraph", align: draft.align, indent: draft.indent, image: draft.images[next].data})
+		next++
+	}
+	flushRuns()
+	if pageBreak && !hasText {
+		out = append(out, wordDraft{kind: draft.kind, align: draft.align, indent: draft.indent, pageBreak: true})
+	}
+	if len(out) == 0 {
+		draft.pageBreak = pageBreak
+		draft.images = nil
+		return []wordDraft{draft}
+	}
+	return out
+}
+
 func expandWordDrafts(drafts []wordDraft) []wordBlock {
 	blocks := make([]wordBlock, 0, len(drafts))
 	for _, draft := range drafts {
+		if draft.image != "" {
+			blocks = append(blocks, wordBlock{
+				ID:     idAt("b", len(blocks)+1),
+				Type:   "image",
+				Align:  draft.align,
+				Indent: draft.indent,
+				Runs:   []wordRun{{}},
+				Image:  draft.image,
+			})
+			continue
+		}
 		lines := splitWordLines(draft.runs)
 		if len(lines) == 0 {
 			lines = [][]wordRun{{{}}}
@@ -444,6 +749,10 @@ func splitWordLines(runs []wordRun) [][]wordRun {
 		return nil
 	}
 	return lines
+}
+
+func wordMain(name xml.Name) bool {
+	return name.Space == "" || strings.Contains(name.Space, "wordprocessingml")
 }
 
 func wordStyleIn(style string) string {
