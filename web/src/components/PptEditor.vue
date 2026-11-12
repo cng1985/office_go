@@ -13,6 +13,7 @@ import {
   textElement,
 } from '../editors/ppt'
 import { useSessionStore } from '../stores/session'
+import { fileToJpeg, fittedSize } from '../editors/image'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -47,6 +48,7 @@ const painter = ref(null)
 const transition = ref('none')
 const activeTheme = ref('light')
 const colorInput = ref(null)
+const imageInput = ref(null)
 const rulerX = Array.from({ length: 26 }, (_, index) => index + 1)
 const rulerY = Array.from({ length: 14 }, (_, index) => index + 1)
 const THEMES = [
@@ -261,18 +263,38 @@ function cycleTheme() {
   applyTheme(THEMES[(index + 1) % THEMES.length])
 }
 function addPicture() {
-  if (props.readonly || slide.value.elements.length >= 40) return
+  if (props.readonly || !slide.value || slide.value.elements.length >= 40) return
+  imageInput.value?.click()
+}
+async function onPicture(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || props.readonly || !slide.value || slide.value.elements.length >= 40) return
+  let image
+  try {
+    image = await fileToJpeg(file)
+  } catch {
+    return
+  }
+  const size = fittedSize(image.width, image.height, 480, 300)
   checkpoint()
-  const element = shapeElement(newId(), 'rect')
-  element.x = 280
-  element.y = 150
-  element.w = 400
-  element.h = 240
-  element.fill = '#e8eaed'
-  element.text = '图片'
-  element.color = '#5f6368'
+  const element = {
+    id: newId(),
+    kind: 'image',
+    x: Math.round((CANVAS_W - size.w) / 2),
+    y: Math.round((CANVAS_H - size.h) / 2),
+    w: size.w,
+    h: size.h,
+    text: '',
+    font_size: 18,
+    color: '#202124',
+    bold: false,
+    align: 'left',
+    image: image.url,
+  }
   slide.value.elements.push(element)
   selectedId.value = element.id
+  editingId.value = ''
   touch()
 }
 function addLine() {
@@ -298,7 +320,7 @@ function togglePainter() {
 }
 function applyPainter(element) {
   const style = painter.value
-  if (!style) return
+  if (!style || element.kind === 'image') return
   checkpoint()
   element.color = style.color
   element.font_size = style.font_size
@@ -395,7 +417,7 @@ function select(element, event) {
   window.addEventListener('pointerup', up)
 }
 function edit(element) {
-  if (props.readonly) return
+  if (props.readonly || element.kind === 'image') return
   selectedId.value = element.id
   editingId.value = element.id
   if (!isPlaceholder(element)) return
@@ -625,23 +647,23 @@ onBeforeUnmount(() => {
                   <button type="button" @click="run(() => addSlide('title'))">幻灯片</button>
                 </template>
                 <template v-else-if="name === '格式'">
-                  <button type="button" :disabled="!selected || readonly" @click="run(() => flag(selected, 'bold', !selected.bold))">加粗</button>
-                  <button type="button" :disabled="!selected || readonly" @click="run(() => flag(selected, 'italic', !selected.italic))">斜体</button>
-                  <button type="button" :disabled="!selected || readonly" @click="run(() => flag(selected, 'underline', !selected.underline))">下划线</button>
-                  <button type="button" :disabled="!selected || readonly" @click="run(() => setAlign('left'))">左对齐</button>
-                  <button type="button" :disabled="!selected || readonly" @click="run(() => setAlign('center'))">居中</button>
-                  <button type="button" :disabled="!selected || readonly" @click="run(() => setAlign('right'))">右对齐</button>
+                  <button type="button" :disabled="!selected || selected.kind === 'image' || readonly" @click="run(() => flag(selected, 'bold', !selected.bold))">加粗</button>
+                  <button type="button" :disabled="!selected || selected.kind === 'image' || readonly" @click="run(() => flag(selected, 'italic', !selected.italic))">斜体</button>
+                  <button type="button" :disabled="!selected || selected.kind === 'image' || readonly" @click="run(() => flag(selected, 'underline', !selected.underline))">下划线</button>
+                  <button type="button" :disabled="!selected || selected.kind === 'image' || readonly" @click="run(() => setAlign('left'))">左对齐</button>
+                  <button type="button" :disabled="!selected || selected.kind === 'image' || readonly" @click="run(() => setAlign('center'))">居中</button>
+                  <button type="button" :disabled="!selected || selected.kind === 'image' || readonly" @click="run(() => setAlign('right'))">右对齐</button>
                   <label>字号
-                    <input :value="selected?.font_size || 24" :disabled="!selected || readonly" type="number" min="12" max="96" @change="selected.font_size = Number($event.target.value); commitSize()" />
+                    <input :value="selected?.font_size || 24" :disabled="!selected || selected.kind === 'image' || readonly" type="number" min="12" max="96" @change="selected.font_size = Number($event.target.value); commitSize()" />
                   </label>
                   <label>颜色
-                    <input :value="selected?.color || '#202124'" :disabled="!selected || readonly" type="color" @input="selected.color = $event.target.value; touch()" />
+                    <input :value="selected?.color || '#202124'" :disabled="!selected || selected.kind === 'image' || readonly" type="color" @input="selected.color = $event.target.value; touch()" />
                   </label>
                   <label>填充
-                    <input :value="selected?.fill || '#ffffff'" :disabled="!selected || readonly" type="color" @input="selected.fill = $event.target.value; touch()" />
+                    <input :value="selected?.fill || '#ffffff'" :disabled="!selected || selected.kind === 'image' || readonly" type="color" @input="selected.fill = $event.target.value; touch()" />
                   </label>
                   <label>字体
-                    <select :value="selected?.font || ''" :disabled="!selected || readonly" @change="setFont">
+                    <select :value="selected?.font || ''" :disabled="!selected || selected.kind === 'image' || readonly" @change="setFont">
                       <option value="">黑体</option>
                       <option value="serif">宋体</option>
                       <option value="mono">等宽</option>
@@ -739,9 +761,16 @@ onBeforeUnmount(() => {
       <button type="button" title="文本框" data-testid="add-text" @click="addText">
         <svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v12M8 18h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       </button>
-      <button type="button" title="图片" @click="addPicture">
+      <button type="button" title="图片" data-testid="insert-picture" @click="addPicture">
         <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.4" fill="currentColor"/><path d="M5 16l4-3 3 2 3-4 4 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
       </button>
+      <template v-if="selected?.kind === 'image'">
+        <button type="button" title="靠左" data-testid="picture-align-left" @click="alignElement('left')">靠左</button>
+        <button type="button" title="水平居中" data-testid="picture-align-center" @click="alignElement('center')">居中</button>
+        <button type="button" title="靠右" data-testid="picture-align-right" @click="alignElement('right')">靠右</button>
+        <button type="button" title="靠上" data-testid="picture-align-top" @click="alignElement('top')">靠上</button>
+        <button type="button" title="靠下" data-testid="picture-align-bottom" @click="alignElement('bottom')">靠下</button>
+      </template>
       <div class="menu-anchor">
         <button type="button" title="形状" data-testid="add-shape" @click="addShape('rect')">
           <svg viewBox="0 0 24 24"><rect x="5" y="6" width="14" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
@@ -814,7 +843,10 @@ onBeforeUnmount(() => {
           <span>{{ index + 1 }}</span>
           <button type="button" class="slide-thumb" @click="chooseSlide(index)">
             <div class="mini" :style="{ background: item.background }">
-              <span v-for="element in item.elements" :key="element.id" class="mini-el" :class="element.shape" :style="previewStyle(element)">{{ element.text }}</span>
+              <span v-for="element in item.elements" :key="element.id" class="mini-el" :class="[element.kind, element.shape]" :style="previewStyle(element)">
+                <img v-if="element.kind === 'image' && element.image" class="mini-img" :src="element.image" alt="" />
+                <template v-else>{{ element.text }}</template>
+              </span>
             </div>
           </button>
         </div>
@@ -844,8 +876,9 @@ onBeforeUnmount(() => {
                 @pointerdown.stop="select(element, $event)"
                 @dblclick.stop="edit(element)"
               >
+                <img v-if="element.kind === 'image' && element.image" class="ppt-photo" :src="element.image" alt="" draggable="false" />
                 <textarea
-                  v-if="!readonly && element.id === editingId"
+                  v-else-if="!readonly && element.id === editingId"
                   v-model="element.text"
                   data-testid="ppt-text"
                   @pointerdown.stop
@@ -894,7 +927,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div class="theme-body" v-else>
-          <button type="button" @click="addPicture">图片占位</button>
+          <button type="button" data-testid="add-picture" @click="addPicture">图片</button>
           <button type="button" @click="addText">文本框</button>
           <button type="button" @click="addShape('rect')">矩形</button>
           <button type="button" @click="addShape('ellipse')">椭圆</button>
@@ -904,6 +937,7 @@ onBeforeUnmount(() => {
         <button type="button" class="theme-import" @click="colorInput?.click()">导入主题背景</button>
       </aside>
       <input ref="colorInput" class="sr-only" type="color" aria-label="主题背景色" @input="applyBackground($event.target.value)" />
+      <input ref="imageInput" class="sr-only" data-testid="picture-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" @change="onPicture" />
       <nav class="side-rail">
         <button type="button" :class="{ active: panel === 'media' }" @click="panel = panel === 'media' ? 'theme' : 'media'">
           <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.3" fill="currentColor"/><path d="M5 16l4-3 3 2 3-4 4 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
@@ -923,7 +957,8 @@ onBeforeUnmount(() => {
       <div class="show-fit" :style="{ transform: `scale(${showScale})` }">
         <div class="canvas show-canvas" :class="{ fade: transition === 'fade' }" :key="slide.id" :style="{ background: slide.background }">
           <div v-for="element in slide.elements" :key="element.id" class="ppt-el" :class="[element.kind, element.shape]" :style="elementStyle(element)">
-            <div class="ppt-text">{{ element.text }}</div>
+            <img v-if="element.kind === 'image' && element.image" class="ppt-photo" :src="element.image" alt="" />
+            <div v-else class="ppt-text">{{ element.text }}</div>
           </div>
         </div>
       </div>

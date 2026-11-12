@@ -156,6 +156,9 @@ func (pen *pdfPen) drawImage(block wordBlock) {
 	maxW := pdfPageW - pdfMargin*2
 	maxH := pdfPageH - pdfMargin*2
 	dw := maxW
+	if block.Width >= 20 && block.Width < 100 {
+		dw = maxW * float64(block.Width) / 100
+	}
 	dh := dw * float64(height) / float64(width)
 	if dh > maxH {
 		dh = maxH
@@ -166,6 +169,12 @@ func (pen *pdfPen) drawImage(block wordBlock) {
 	}
 	pen.images = append(pen.images, data)
 	x := pdfMargin
+	switch block.Align {
+	case "center":
+		x += (maxW - dw) / 2
+	case "right":
+		x += maxW - dw
+	}
 	y := pen.y - dh
 	fmt.Fprintf(&pen.cur, "q %.2f 0 0 %.2f %.2f %.2f cm /Im%d Do Q\n", dw, dh, x, y, len(pen.images))
 	pen.y = y - 8

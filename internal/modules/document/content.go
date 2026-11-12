@@ -35,6 +35,7 @@ type wordBlock struct {
 	Indent  int       `json:"indent,omitempty"`
 	Spacing string    `json:"spacing,omitempty"`
 	Image   string    `json:"image,omitempty"`
+	Width   int       `json:"width,omitempty"`
 }
 
 type wordRun struct {
@@ -118,6 +119,7 @@ type pptElement struct {
 	Fill      string  `json:"fill,omitempty"`
 	Shape     string  `json:"shape,omitempty"`
 	Font      string  `json:"font,omitempty"`
+	Image     string  `json:"image,omitempty"`
 }
 
 // Canonical 校验并重新序列化文档正文，保证摘要稳定。
@@ -223,8 +225,17 @@ func validateWord(content *wordContent) error {
 			if err := validateWordImage(block.Image); err != nil {
 				return err
 			}
+			if block.Width != 0 && (block.Width < 20 || block.Width > 100) {
+				return apperrors.BadRequest(400, "图片宽度无效")
+			}
+			if block.Align == "justify" {
+				return apperrors.BadRequest(400, "文稿对齐方式无效")
+			}
 		default:
 			return apperrors.BadRequest(400, "文稿段落类型无效")
+		}
+		if block.Type != "image" && block.Width != 0 {
+			return apperrors.BadRequest(400, "图片宽度无效")
 		}
 		switch block.Align {
 		case "left", "center", "right", "justify":
@@ -518,14 +529,24 @@ func validatePPT(content *pptContent) error {
 			elements[element.ID] = struct{}{}
 			switch element.Kind {
 			case "text":
-				if element.Shape != "" {
+				if element.Shape != "" || element.Image != "" {
 					return apperrors.BadRequest(400, "幻灯片元素类型无效")
 				}
 			case "shape":
+				if element.Image != "" {
+					return apperrors.BadRequest(400, "幻灯片元素类型无效")
+				}
 				switch element.Shape {
 				case "rect", "ellipse", "round":
 				default:
 					return apperrors.BadRequest(400, "幻灯片形状无效")
+				}
+			case "image":
+				if element.Shape != "" || element.Fill != "" || strings.TrimSpace(element.Text) != "" {
+					return apperrors.BadRequest(400, "幻灯片元素类型无效")
+				}
+				if err := validateWordImage(element.Image); err != nil {
+					return err
 				}
 			default:
 				return apperrors.BadRequest(400, "幻灯片元素类型无效")

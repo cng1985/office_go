@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"math"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -98,9 +99,15 @@ func exportPptx(canonical []byte) ([]byte, error) {
 	rels.WriteString(officeXMLHeader)
 	rels.WriteString(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`)
 	rels.WriteString(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>`)
+	imageCount := 0
 	for i, slide := range content.Slides {
-		files[fmt.Sprintf("ppt/slides/slide%d.xml", i+1)] = slideXML(slide)
-		files[fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", i+1)] = pptSlideRels
+		xml, images := slideXML(slide)
+		files[fmt.Sprintf("ppt/slides/slide%d.xml", i+1)] = xml
+		files[fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", i+1)] = pptSlideRelsXML(i+1, len(images))
+		for n, data := range images {
+			files[fmt.Sprintf("ppt/media/s%di%d.jpeg", i+1, n+1)] = string(data)
+			imageCount++
+		}
 		rid := fmt.Sprintf("rId%d", i+2)
 		fmt.Fprintf(&rels, `<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide%d.xml"/>`, rid, i+1)
 		fmt.Fprintf(&slideIDs, `<p:sldId id="%d" r:id="%s"/>`, 256+i, rid)
@@ -115,10 +122,14 @@ func exportPptx(canonical []byte) ([]byte, error) {
   <p:sldSz cx="12192000" cy="6858000" type="screen16x9"/>
   <p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>`, slideIDs.String())
+	jpegDefault := ""
+	if imageCount > 0 {
+		jpegDefault = `<Default Extension="jpeg" ContentType="image/jpeg"/>`
+	}
 	files["[Content_Types].xml"] = officeXMLHeader + `
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>` + jpegDefault + `
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
   <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
   <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
@@ -126,14 +137,40 @@ func exportPptx(canonical []byte) ([]byte, error) {
 	return packZip(files)
 }
 
-func slideXML(slide pptSlide) string {
+func pptSlideRelsXML(slide, imageCount int) string {
+	if imageCount == 0 {
+		return pptSlideRels
+	}
 	var body strings.Builder
+	body.WriteString(officeXMLHeader)
+	body.WriteString(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`)
+	body.WriteString(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>`)
+	for i := 1; i <= imageCount; i++ {
+		fmt.Fprintf(&body, `<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/s%di%d.jpeg"/>`, i+1, slide, i)
+	}
+	body.WriteString(`</Relationships>`)
+	return body.String()
+}
+
+func slideXML(slide pptSlide) (string, [][]byte) {
+	var body strings.Builder
+	var images [][]byte
 	body.WriteString(officeXMLHeader)
 	body.WriteString(`<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld>`)
 	fmt.Fprintf(&body, `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="%s"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`, strings.ToUpper(strings.TrimPrefix(slide.Background, "#")))
 	body.WriteString(`<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>`)
 	next := 2
 	for _, element := range slide.Elements {
+		if element.Kind == "image" {
+			raw, ok := jpegPayload(element.Image)
+			if !ok {
+				continue
+			}
+			images = append(images, raw)
+			writePPTPicture(&body, element, next, len(images)+1)
+			next++
+			continue
+		}
 		name := "云笺文本"
 		if element.Kind == "shape" {
 			name = "云笺形状"
@@ -148,7 +185,31 @@ func slideXML(slide pptSlide) string {
 		}, next, "云笺备注")
 	}
 	body.WriteString(`</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`)
-	return body.String()
+	return body.String(), images
+}
+
+func writePPTPicture(body *strings.Builder, element pptElement, id, rel int) {
+	x, y, w, h := containedPicture(element)
+	fmt.Fprintf(body, `<p:pic><p:nvPicPr><p:cNvPr id="%d" name="云笺图片"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>`, id)
+	fmt.Fprintf(body, `<p:blipFill><a:blip r:embed="rId%d"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>`, rel)
+	fmt.Fprintf(body, `<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`,
+		pxToEmu(x), pxToEmu(y), pxToEmu(w), pxToEmu(h))
+}
+
+func containedPicture(element pptElement) (x, y, w, h float64) {
+	x, y, w, h = element.X, element.Y, element.W, element.H
+	raw, ok := jpegPayload(element.Image)
+	if !ok || w <= 0 || h <= 0 {
+		return x, y, w, h
+	}
+	iw, ih, _, ok := jpegInfo(raw)
+	if !ok || iw < 1 || ih < 1 {
+		return x, y, w, h
+	}
+	scale := math.Min(w/float64(iw), h/float64(ih))
+	dw := float64(iw) * scale
+	dh := float64(ih) * scale
+	return x + (w-dw)/2, y + (h-dh)/2, dw, dh
 }
 
 func writePPTShape(body *strings.Builder, element pptElement, id int, name string) {
@@ -243,7 +304,8 @@ func importPptx(filename string, body []byte) (string, string, []byte, error) {
 	}
 	slides := make([]pptSlide, 0, len(parts))
 	for i, part := range parts {
-		background, elements, notes, err := parseSlide(part)
+		relsPath := path.Join(path.Dir(part.name), "_rels", path.Base(part.name)+".rels")
+		background, elements, notes, err := parseSlide(part.data, imagePartsIn(files, files[relsPath], path.Dir(part.name)))
 		if err != nil {
 			return "", "", nil, readFailure(err)
 		}
@@ -268,7 +330,12 @@ func importPptx(filename string, body []byte) (string, string, []byte, error) {
 	return KindPPT, titleFromFilename(filename), canonical, nil
 }
 
-func slideParts(files map[string][]byte) ([][]byte, error) {
+type slideSource struct {
+	name string
+	data []byte
+}
+
+func slideParts(files map[string][]byte) ([]slideSource, error) {
 	rels := parseRels(files["ppt/_rels/presentation.xml.rels"])
 	var ids []string
 	if err := walkXML(files["ppt/presentation.xml"], func(token xml.Token) error {
@@ -283,14 +350,14 @@ func slideParts(files map[string][]byte) ([][]byte, error) {
 	}); err != nil {
 		return nil, apperrors.BadRequest(400, "演示文稿无法读取")
 	}
-	parts := make([][]byte, 0, len(ids))
+	parts := make([]slideSource, 0, len(ids))
 	for _, id := range ids {
 		target := strings.TrimPrefix(rels[id], "/")
 		if target != "" && !strings.HasPrefix(target, "ppt/") {
 			target = pathJoin("ppt", target)
 		}
 		if files[target] != nil {
-			parts = append(parts, files[target])
+			parts = append(parts, slideSource{name: target, data: files[target]})
 		}
 	}
 	if len(parts) > 0 {
@@ -298,6 +365,7 @@ func slideParts(files map[string][]byte) ([][]byte, error) {
 	}
 	type numbered struct {
 		n    int
+		name string
 		data []byte
 	}
 	found := make([]numbered, 0)
@@ -307,11 +375,11 @@ func slideParts(files map[string][]byte) ([][]byte, error) {
 			continue
 		}
 		n, _ := strconv.Atoi(match[1])
-		found = append(found, numbered{n: n, data: data})
+		found = append(found, numbered{n: n, name: name, data: data})
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].n < found[j].n })
 	for _, item := range found {
-		parts = append(parts, item.data)
+		parts = append(parts, slideSource{name: item.name, data: item.data})
 	}
 	return parts, nil
 }
@@ -330,9 +398,11 @@ type shapeDraft struct {
 	size       float64
 	x, y, w, h float64
 	hasPos     bool
+	picture    bool
+	image      string
 }
 
-func parseSlide(data []byte) (string, []pptElement, string, error) {
+func parseSlide(data []byte, images map[string]string) (string, []pptElement, string, error) {
 	background := "#ffffff"
 	var notes strings.Builder
 	var elements []pptElement
@@ -340,15 +410,31 @@ func parseSlide(data []byte) (string, []pptElement, string, error) {
 	var shapes []*shapeDraft
 	inBackground := 0
 	readingText := false
+	fallback := 0
 	err := walkXML(data, func(token xml.Token) error {
 		switch node := token.(type) {
 		case xml.StartElement:
+			if node.Name.Local == "Fallback" {
+				fallback++
+				return nil
+			}
+			if fallback > 0 {
+				return nil
+			}
 			stack = append(stack, node.Name.Local)
 			switch node.Name.Local {
 			case "bg":
 				inBackground++
 			case "sp":
 				shapes = append(shapes, &shapeDraft{color: "#202124", align: "left", size: 18})
+			case "pic":
+				shapes = append(shapes, &shapeDraft{color: "#202124", align: "left", size: 18, picture: true})
+			case "blip":
+				if shape := topShape(shapes); shape != nil && shape.picture {
+					if data := images[attr(node, "embed")]; data != "" {
+						shape.image = data
+					}
+				}
 			case "cNvPr":
 				if shape := topShape(shapes); shape != nil && !insideGroup(stack) {
 					shape.name = attr(node, "name")
@@ -416,6 +502,15 @@ func parseSlide(data []byte) (string, []pptElement, string, error) {
 				readingText = true
 			}
 		case xml.EndElement:
+			if node.Name.Local == "Fallback" {
+				if fallback > 0 {
+					fallback--
+				}
+				return nil
+			}
+			if fallback > 0 {
+				return nil
+			}
 			switch node.Name.Local {
 			case "bg":
 				if inBackground > 0 {
@@ -429,7 +524,7 @@ func parseSlide(data []byte) (string, []pptElement, string, error) {
 						shape.text.WriteByte('\n')
 					}
 				}
-			case "sp":
+			case "sp", "pic":
 				if len(shapes) > 0 {
 					shape := shapes[len(shapes)-1]
 					shapes = shapes[:len(shapes)-1]
@@ -440,6 +535,9 @@ func parseSlide(data []byte) (string, []pptElement, string, error) {
 				stack = stack[:len(stack)-1]
 			}
 		case xml.CharData:
+			if fallback > 0 {
+				break
+			}
 			if readingText {
 				if shape := topShape(shapes); shape != nil {
 					shape.text.Write(node)
@@ -458,6 +556,10 @@ func parseSlide(data []byte) (string, []pptElement, string, error) {
 }
 
 func appendShape(shape *shapeDraft, elements *[]pptElement, notes *strings.Builder) {
+	if shape.picture {
+		appendPicture(shape, elements)
+		return
+	}
 	text := strings.TrimRight(cleanMultiline(shape.text.String()), "\n")
 	if shape.name == "云笺备注" {
 		if strings.TrimSpace(text) == "" {
@@ -537,6 +639,37 @@ func appendShape(shape *shapeDraft, elements *[]pptElement, notes *strings.Build
 		element.Align = "left"
 	}
 	*elements = append(*elements, element)
+}
+
+func appendPicture(shape *shapeDraft, elements *[]pptElement) {
+	if shape.image == "" {
+		return
+	}
+	if !shape.hasPos {
+		shape.x = 180
+		shape.y = 120
+		shape.w = 480
+		shape.h = 280
+	}
+	if shape.w <= 0 {
+		shape.w = 320
+	}
+	if shape.h <= 0 {
+		shape.h = 200
+	}
+	*elements = append(*elements, pptElement{
+		ID:       idAt("e", len(*elements)+1),
+		Kind:     "image",
+		X:        clampFloat(roundPx(shape.x), -200, 1100),
+		Y:        clampFloat(roundPx(shape.y), -200, 700),
+		W:        clampFloat(roundPx(shape.w), 24, 960),
+		H:        clampFloat(roundPx(shape.h), 24, 540),
+		Text:     "",
+		FontSize: 18,
+		Color:    "#202124",
+		Align:    "left",
+		Image:    shape.image,
+	})
 }
 
 func topShape(shapes []*shapeDraft) *shapeDraft {
