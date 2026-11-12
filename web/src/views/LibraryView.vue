@@ -97,11 +97,11 @@ async function load() {
     if (!query) docBody.folder_id = current || '0'
     const folderPromise = searchFolders(folderBody).catch((err) => {
       if (!query) throw err
-      error.value = err.message
-      return { data: [] }
+      return { data: [], failed: err }
     })
     const [folderPage, docPage] = await Promise.all([folderPromise, searchDocuments(docBody)])
     if (`${searching.value}|${folderId.value}|${kind.value}|${title.value}` !== stamp) return
+    if (folderPage.failed) error.value = folderPage.failed.message
     folders.value = kind.value && !query ? [] : folderPage.data
     documents.value = docPage.data
     if (current && !query) {
