@@ -191,8 +191,8 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .view-switch button[aria-pressed="true"] { color: #1a73e8; background: #e8f0fe; border-color: transparent; }
 .doc-list { display: grid; }
 .doc-row {
-  display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 12px; align-items: center;
-  padding: 10px 8px; border-bottom: 1px solid #e0e0e0;
+  display: grid; grid-template-columns: 36px minmax(0, 1fr) minmax(0, max-content); gap: 12px; align-items: center;
+  padding: 10px 8px; border-bottom: 1px solid #e0e0e0; min-width: 0;
 }
 .doc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; padding-top: 12px; }
 .doc-card {
@@ -368,13 +368,59 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .image-width input { width: 88px; }
 .page-break-line { margin: 18px 0; border-top: 1px dashed #9aa0a6; text-align: center; color: #80868b; font-size: 12px; }
 .library-frame { display: flex; align-items: stretch; min-height: calc(100vh - 64px); }
+.library-home {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.library-home .home-bar { flex: none; }
+.library-home .library-frame {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
 .library-side {
   width: 240px; flex: none; display: flex; flex-direction: column;
   background: #f8f9fa; border-right: 1px solid #e0e0e0; min-height: calc(100vh - 64px);
 }
+.library-home .library-side { min-height: 0; height: 100%; overflow: hidden; }
 .folder-tree {
   width: auto; flex: 0 1 auto; max-height: calc(100vh - 140px); background: transparent; border-right: 0;
   padding: 12px 8px 8px; overflow: auto;
+}
+.library-home .folder-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.library-home .library {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+.library-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.library-intro { padding: 28px 32px 22px; }
+.library-home .library-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-top: 0;
+  padding: 0 32px;
+  background: #fff;
 }
 .tree-row {
   display: flex; align-items: center; width: 100%; min-height: 28px; border-radius: 4px; color: #202124;
@@ -397,6 +443,13 @@ button.tree-row { border: 0; background: transparent; text-align: left; padding:
 }
 .tree-manage:hover { background: #e8eaed; }
 .library-frame .library { max-width: none; flex: 1; min-width: 0; }
+.library-scroll > .error,
+.library-scroll > .doc-list,
+.library-scroll > .doc-grid,
+.library-scroll > .empty { margin-left: 32px; margin-right: 32px; }
+.library-scroll > .doc-list,
+.library-scroll > .doc-grid { padding-bottom: 48px; }
+.library-scroll > .empty { margin-bottom: 48px; }
 .page-break-line span { background: #fff; padding: 0 8px; position: relative; top: -10px; }
 .word-suggest { display: flex; gap: 8px; align-items: center; margin-left: 28px; }
 .word-suggest > button, .suggest-more > button { border: 1px solid #dadce0; background: #fff; color: #3c4043; border-radius: 16px; padding: 6px 12px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
@@ -916,6 +969,14 @@ button.tree-row { border: 0; background: transparent; text-align: left; padding:
   .library-bar { align-items: stretch; flex-wrap: wrap; }
   .library-frame { flex-direction: column; min-height: 0; }
   .library-side { width: 100%; min-height: 0; border-right: 0; border-bottom: 1px solid #e0e0e0; }
+  .library-home .library-side { height: auto; max-height: 240px; }
+  .library-home .folder-tree { max-height: none; }
+  .library-intro { padding: 20px 16px 16px; }
+  .library-home .library-bar { padding-left: 16px; padding-right: 16px; }
+  .library-scroll > .error,
+  .library-scroll > .doc-list,
+  .library-scroll > .doc-grid,
+  .library-scroll > .empty { margin-left: 16px; margin-right: 16px; }
   .account-page { padding: 20px 16px 48px; }
   .teams-layout { grid-template-columns: 1fr; }
   .account-grid { grid-template-columns: 1fr; }

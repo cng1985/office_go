@@ -507,7 +507,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="home">
+  <div class="home library-home">
     <header class="home-bar">
       <router-link class="home-brand" to="/">
         <span class="mark word">W</span>
@@ -561,6 +561,8 @@ onMounted(() => {
       </nav>
       </aside>
       <main class="library">
+      <div class="library-scroll">
+      <div class="library-intro">
       <h1>新建</h1>
       <div class="create-row">
         <button type="button" class="create-tile" data-testid="create-word" :disabled="pending" @click="create('word')">
@@ -605,6 +607,7 @@ onMounted(() => {
         </template>
       </nav>
       <p class="search-note" v-if="searching">正在搜索当前文档库</p>
+      </div>
       <div class="library-bar">
         <div class="filters">
           <button type="button" :aria-pressed="kind === ''" @click="kind = ''">全部</button>
@@ -684,6 +687,7 @@ onMounted(() => {
       <div class="empty" v-else data-testid="empty-library">
         <h2>{{ emptyTitle }}</h2>
         <p class="muted">{{ emptyText }}</p>
+      </div>
       </div>
       </main>
     </div>
