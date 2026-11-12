@@ -37,6 +37,9 @@ func (r *Resource) Create(ctx context.Context, request *DocumentCreateRequest) (
 	if request.FolderID < 0 {
 		return zero, apperrors.BadRequest(400, "文件夹不存在")
 	}
+	if err := requireNonNegativeTeam(request.TeamID); err != nil {
+		return zero, err
+	}
 	request.Title = title
 	return r.repo.Create(ctx, request)
 }
@@ -85,6 +88,9 @@ func (r *Resource) Search(ctx context.Context, search *DocumentSearch) (response
 	}
 	if search.FolderID != nil && *search.FolderID < 0 {
 		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	if err := requireNonNegativeTeam(search.TeamID); err != nil {
+		return zero, err
 	}
 	page, pageSize, err := normalizePage(search.Page, search.PageSize)
 	if err != nil {
@@ -210,7 +216,10 @@ func (r *Resource) Import(ctx context.Context, request *DocumentImportRequest) (
 	if request.FolderID < 0 {
 		return zero, apperrors.BadRequest(400, "文件夹不存在")
 	}
-	return r.repo.Import(ctx, kind, title, request.FolderID, content)
+	if err := requireNonNegativeTeam(request.TeamID); err != nil {
+		return zero, err
+	}
+	return r.repo.Import(ctx, kind, title, request.FolderID, request.TeamID, content)
 }
 
 func (r *Resource) Move(ctx context.Context, request *DocumentMoveRequest) (response.Response[DocumentResponse], error) {
@@ -237,6 +246,9 @@ func (r *Resource) CreateFolder(ctx context.Context, request *FolderCreateReques
 	}
 	if request.ParentID < 0 {
 		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	if err := requireNonNegativeTeam(request.TeamID); err != nil {
+		return zero, err
 	}
 	name, err := normalizeFolderName(request.Name)
 	if err != nil {
@@ -295,6 +307,9 @@ func (r *Resource) SearchFolders(ctx context.Context, search *FolderSearch) (res
 	}
 	if search.ParentID != nil && *search.ParentID < 0 {
 		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	if err := requireNonNegativeTeam(search.TeamID); err != nil {
+		return zero, err
 	}
 	page, pageSize, err := normalizePage(search.Page, search.PageSize)
 	if err != nil {

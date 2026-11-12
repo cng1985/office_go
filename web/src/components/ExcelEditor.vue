@@ -1372,7 +1372,7 @@ onBeforeUnmount(() => {
             <button type="button" @click="emit('versions'); menu = ''">版本历史</button>
           </div>
         </div>
-        <router-link class="sheets-avatar" to="/" :title="session.account?.display_name || '账号'">{{ accountMark }}</router-link>
+        <router-link class="sheets-avatar" to="/account" data-testid="account-link" :title="session.account?.display_name || '个人中心'">{{ accountMark }}</router-link>
       </div>
     </div>
 

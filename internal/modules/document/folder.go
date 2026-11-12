@@ -23,7 +23,17 @@ func (r *Repository) CreateFolder(ctx context.Context, request *FolderCreateRequ
 		return result, err
 	}
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := requireTeam(tx, request.TeamID, scope.ActorID); err != nil {
+			return err
+		}
 		if request.ParentID != 0 {
+			parent, err := loadOwnedFolder(tx, request.ParentID, scope.ActorID)
+			if err != nil {
+				return err
+			}
+			if valueOrZero(parent.TeamID) != request.TeamID {
+				return apperrors.NotFound(404, "文件夹不存在")
+			}
 			depth, err := folderDepth(tx, scope.ActorID, request.ParentID)
 			if err != nil {
 				return err
@@ -33,13 +43,13 @@ func (r *Repository) CreateFolder(ctx context.Context, request *FolderCreateRequ
 			}
 		}
 		var total int64
-		if err := tx.Model(&Folder{}).Where("owner_id = ?", scope.ActorID).Count(&total).Error; err != nil {
+		if err := applySpace(tx.Model(&Folder{}), "", scope.ActorID, request.TeamID).Count(&total).Error; err != nil {
 			return apperrors.WrapInternal(err)
 		}
 		if total >= maxFolders {
 			return apperrors.BadRequest(400, "文件夹数量已达上限")
 		}
-		taken, err := folderNameTaken(tx, scope.ActorID, request.ParentID, request.Name, 0)
+		taken, err := folderNameTaken(tx, scope.ActorID, request.TeamID, request.ParentID, request.Name, 0)
 		if err != nil {
 			return err
 		}
@@ -48,6 +58,9 @@ func (r *Repository) CreateFolder(ctx context.Context, request *FolderCreateRequ
 		}
 		now := time.Now().UTC()
 		folder := &Folder{OwnerID: scope.ActorID, Name: request.Name, CreatedAt: now, UpdatedAt: now}
+		if request.TeamID != 0 {
+			folder.TeamID = &request.TeamID
+		}
 		if request.ParentID != 0 {
 			parent := request.ParentID
 			folder.ParentID = &parent
@@ -80,7 +93,7 @@ func (r *Repository) UpdateFolder(ctx context.Context, request *FolderUpdateRequ
 			return err
 		}
 		parentID := valueOrZero(folder.ParentID)
-		taken, err := folderNameTaken(tx, scope.ActorID, parentID, request.Name, folder.ID)
+		taken, err := folderNameTaken(tx, folder.OwnerID, valueOrZero(folder.TeamID), parentID, request.Name, folder.ID)
 		if err != nil {
 			return err
 		}
@@ -88,7 +101,7 @@ func (r *Repository) UpdateFolder(ctx context.Context, request *FolderUpdateRequ
 			return apperrors.BadRequest(400, "同一位置已有同名文件夹")
 		}
 		now := time.Now().UTC()
-		res := tx.Model(&Folder{}).Where("id = ? AND owner_id = ?", folder.ID, scope.ActorID).Updates(map[string]any{
+		res := guardFolder(tx, folder, scope.ActorID).Updates(map[string]any{
 			"name":       request.Name,
 			"updated_at": now,
 		})
@@ -122,18 +135,19 @@ func (r *Repository) DeleteFolder(ctx context.Context, request *FolderIDRequest)
 		if err != nil {
 			return err
 		}
+		spaceTeam := valueOrZero(folder.TeamID)
 		var documents int64
-		if err := tx.Model(&Document{}).Where("owner_id = ? AND folder_id = ?", scope.ActorID, folder.ID).Count(&documents).Error; err != nil {
+		if err := applySpace(tx.Model(&Document{}), "", scope.ActorID, spaceTeam).Where("folder_id = ?", folder.ID).Count(&documents).Error; err != nil {
 			return apperrors.WrapInternal(err)
 		}
 		var children int64
-		if err := tx.Model(&Folder{}).Where("owner_id = ? AND parent_id = ?", scope.ActorID, folder.ID).Count(&children).Error; err != nil {
+		if err := applySpace(tx.Model(&Folder{}), "", scope.ActorID, spaceTeam).Where("parent_id = ?", folder.ID).Count(&children).Error; err != nil {
 			return apperrors.WrapInternal(err)
 		}
 		if documents > 0 || children > 0 {
 			return apperrors.BadRequest(400, "请先移走文件夹里的内容")
 		}
-		res := tx.Where("id = ? AND owner_id = ?", folder.ID, scope.ActorID).Delete(&Folder{})
+		res := guardFolder(tx, folder, scope.ActorID).Delete(&Folder{})
 		if res.Error != nil {
 			return apperrors.WrapInternal(res.Error)
 		}
@@ -172,8 +186,11 @@ func (r *Repository) SearchFolders(ctx context.Context, search *FolderSearch) (r
 	if err != nil {
 		return result, err
 	}
+	if err := requireTeam(r.db.WithContext(ctx), search.TeamID, scope.ActorID); err != nil {
+		return result, err
+	}
 	filtered := func() *gorm.DB {
-		query := r.db.WithContext(ctx).Model(&Folder{}).Where("owner_id = ?", scope.ActorID)
+		query := applySpace(r.db.WithContext(ctx).Model(&Folder{}), "", scope.ActorID, search.TeamID)
 		if search.ParentID != nil {
 			if *search.ParentID == 0 {
 				query = query.Where("parent_id IS NULL")
@@ -222,7 +239,7 @@ func (r *Repository) Move(ctx context.Context, request *DocumentMoveRequest) (re
 		if doc.Revision != request.Revision {
 			return apperrors.Conflict(10004, "文档已被其他编辑更新，请刷新后重试")
 		}
-		if err := ensureFolder(tx, scope.ActorID, request.FolderID); err != nil {
+		if err := ensureFolderInSpace(tx, scope.ActorID, valueOrZero(doc.TeamID), request.FolderID); err != nil {
 			return err
 		}
 		if valueOrZero(doc.FolderID) == request.FolderID {
@@ -243,8 +260,8 @@ func (r *Repository) Move(ctx context.Context, request *DocumentMoveRequest) (re
 		} else {
 			updates["folder_id"] = request.FolderID
 		}
-		res := tx.Model(&Document{}).
-			Where("id = ? AND owner_id = ? AND revision = ?", doc.ID, scope.ActorID, doc.Revision).
+		res := guardDocument(tx, doc, scope.ActorID).
+			Where("revision = ?", doc.Revision).
 			Updates(updates)
 		if res.Error != nil {
 			return apperrors.WrapInternal(res.Error)
@@ -265,38 +282,56 @@ func (r *Repository) Move(ctx context.Context, request *DocumentMoveRequest) (re
 	return result, nil
 }
 
-func ensureFolder(tx *gorm.DB, ownerID, folderID int64) error {
+func ensureFolderInSpace(tx *gorm.DB, actorID, teamID, folderID int64) error {
 	if folderID == 0 {
 		return nil
 	}
-	_, err := loadOwnedFolder(tx, folderID, ownerID)
-	return err
+	folder, err := loadOwnedFolder(tx, folderID, actorID)
+	if err != nil {
+		return err
+	}
+	if valueOrZero(folder.TeamID) != teamID {
+		return apperrors.NotFound(404, "文件夹不存在")
+	}
+	return nil
 }
 
-func loadOwnedFolder(tx *gorm.DB, id, ownerID int64) (*Folder, error) {
+func loadOwnedFolder(tx *gorm.DB, id, actorID int64) (*Folder, error) {
 	var folder Folder
-	err := tx.Where("id = ? AND owner_id = ?", id, ownerID).Take(&folder).Error
+	err := tx.Where("id = ?", id).Take(&folder).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperrors.NotFound(404, "文件夹不存在")
 	}
 	if err != nil {
 		return nil, apperrors.WrapInternal(err)
 	}
+	if err := allowFolder(tx, &folder, actorID); err != nil {
+		return nil, err
+	}
 	return &folder, nil
 }
 
-func folderDepth(tx *gorm.DB, ownerID, id int64) (int, error) {
+func folderDepth(tx *gorm.DB, actorID, id int64) (int, error) {
 	depth := 0
 	current := id
 	seen := map[int64]struct{}{}
+	var space int64
+	started := false
 	for current != 0 {
 		if _, ok := seen[current]; ok {
 			return 0, apperrors.BadRequest(400, "文件夹层级无效")
 		}
 		seen[current] = struct{}{}
-		folder, err := loadOwnedFolder(tx, current, ownerID)
+		folder, err := loadOwnedFolder(tx, current, actorID)
 		if err != nil {
 			return 0, err
+		}
+		team := valueOrZero(folder.TeamID)
+		if !started {
+			space = team
+			started = true
+		} else if team != space {
+			return 0, apperrors.BadRequest(400, "文件夹层级无效")
 		}
 		depth++
 		if folder.ParentID == nil {
@@ -310,8 +345,8 @@ func folderDepth(tx *gorm.DB, ownerID, id int64) (int, error) {
 	return depth, nil
 }
 
-func folderNameTaken(tx *gorm.DB, ownerID, parentID int64, name string, excludeID int64) (bool, error) {
-	query := tx.Model(&Folder{}).Where("owner_id = ? AND name = ?", ownerID, name)
+func folderNameTaken(tx *gorm.DB, ownerID, teamID, parentID int64, name string, excludeID int64) (bool, error) {
+	query := applySpace(tx.Model(&Folder{}), "", ownerID, teamID).Where("name = ?", name)
 	if parentID == 0 {
 		query = query.Where("parent_id IS NULL")
 	} else {
@@ -327,18 +362,27 @@ func folderNameTaken(tx *gorm.DB, ownerID, parentID int64, name string, excludeI
 	return total > 0, nil
 }
 
-func folderDetail(tx *gorm.DB, ownerID, id int64) (*FolderDetail, error) {
+func folderDetail(tx *gorm.DB, actorID, id int64) (*FolderDetail, error) {
 	chain := make([]Folder, 0, maxFolderDepth)
 	current := id
 	seen := map[int64]struct{}{}
+	var space int64
+	started := false
 	for current != 0 {
 		if _, ok := seen[current]; ok {
 			return nil, apperrors.BadRequest(400, "文件夹层级无效")
 		}
 		seen[current] = struct{}{}
-		folder, err := loadOwnedFolder(tx, current, ownerID)
+		folder, err := loadOwnedFolder(tx, current, actorID)
 		if err != nil {
 			return nil, err
+		}
+		team := valueOrZero(folder.TeamID)
+		if !started {
+			space = team
+			started = true
+		} else if team != space {
+			return nil, apperrors.BadRequest(400, "文件夹层级无效")
 		}
 		chain = append(chain, *folder)
 		if folder.ParentID == nil || len(chain) > maxFolderDepth {

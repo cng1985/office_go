@@ -18,6 +18,7 @@ const (
 type DocumentCreateRequest struct {
 	ID       int64  `json:"id,string"`
 	FolderID int64  `json:"folder_id,string,omitempty"`
+	TeamID   int64  `json:"team_id,string,omitempty"`
 	Kind     string `json:"kind"`
 	Title    string `json:"title"`
 }
@@ -35,10 +36,12 @@ type DocumentIDRequest struct {
 }
 
 // DocumentSearch 是文档库筛选条件。FolderID 为空时不按文件夹过滤。
+// TeamID 为 0 时只查个人库，有值时只查该团队库。
 type DocumentSearch struct {
 	Title    string `json:"title"`
 	Kind     string `json:"kind"`
 	FolderID *int64 `json:"folder_id,string,omitempty"`
+	TeamID   int64  `json:"team_id,string,omitempty"`
 	Sort     string `json:"sort"`
 	Order    string `json:"order"`
 	Page     int    `json:"page"`
@@ -53,8 +56,10 @@ type DocumentMoveRequest struct {
 }
 
 // FolderCreateRequest 在某个位置新建文件夹。parent_id 为 0 表示根目录。
+// team_id 为 0 时建在个人库。
 type FolderCreateRequest struct {
 	ParentID int64  `json:"parent_id,string,omitempty"`
+	TeamID   int64  `json:"team_id,string,omitempty"`
 	Name     string `json:"name"`
 }
 
@@ -69,9 +74,11 @@ type FolderIDRequest struct {
 	ID int64 `json:"id,string"`
 }
 
-// FolderSearch 列出某个目录下的文件夹。ParentID 为空时列出当前用户的全部文件夹。
+// FolderSearch 列出某个目录下的文件夹。ParentID 为空时列出当前空间的全部文件夹。
+// TeamID 为 0 时只查个人库。
 type FolderSearch struct {
 	ParentID *int64 `json:"parent_id,string,omitempty"`
+	TeamID   int64  `json:"team_id,string,omitempty"`
 	Name     string `json:"name"`
 	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`
@@ -122,6 +129,7 @@ type DocumentSimple struct {
 type DocumentResponse struct {
 	ID        int64           `json:"id,string"`
 	FolderID  int64           `json:"folder_id,string,omitempty"`
+	TeamID    int64           `json:"team_id,string,omitempty"`
 	Kind      string          `json:"kind"`
 	Title     string          `json:"title"`
 	Revision  int64           `json:"revision"`
@@ -166,6 +174,7 @@ type DocumentVersionSimple struct {
 // DocumentImportRequest 用文件内容创建一份云端文档。
 type DocumentImportRequest struct {
 	FolderID      int64  `json:"folder_id,string,omitempty"`
+	TeamID        int64  `json:"team_id,string,omitempty"`
 	Filename      string `json:"filename"`
 	ContentBase64 string `json:"content_base64"`
 }

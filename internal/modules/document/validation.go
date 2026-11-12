@@ -80,6 +80,13 @@ func requireRevision(revision int64) error {
 	return nil
 }
 
+func requireNonNegativeTeam(id int64) error {
+	if id < 0 {
+		return apperrors.BadRequest(400, "团队不存在")
+	}
+	return nil
+}
+
 func hasControl(value string, allowNewline bool) bool {
 	for _, r := range value {
 		if allowNewline && r == '\n' {

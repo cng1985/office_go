@@ -25,3 +25,25 @@ type Session struct {
 }
 
 func (Session) TableName() string { return "account_session" }
+
+// Team 是协作空间。文档和文件夹通过 team_id 挂在这里，不在本表级联删除。
+type Team struct {
+	ID        int64  `gorm:"primaryKey;autoIncrement"`
+	OwnerID   int64  `gorm:"not null;index:idx_account_team_owner"`
+	Name      string `gorm:"size:40;not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (Team) TableName() string { return "account_team" }
+
+// TeamMember 记录用户在团队中的角色。所有者同时是一名成员。
+type TeamMember struct {
+	ID        int64  `gorm:"primaryKey;autoIncrement"`
+	TeamID    int64  `gorm:"not null;uniqueIndex:uk_account_team_member,priority:1"`
+	UserID    int64  `gorm:"not null;uniqueIndex:uk_account_team_member,priority:2;index:idx_account_team_member_user"`
+	Role      string `gorm:"size:16;not null"`
+	CreatedAt time.Time
+}
+
+func (TeamMember) TableName() string { return "account_team_member" }

@@ -17,6 +17,7 @@ import {
 } from '../api/document'
 import KindMark from '../components/KindMark.vue'
 import { KINDS, formatTime } from '../editors/kinds'
+import { searchTeams } from '../api/team'
 import { useSessionStore } from '../stores/session'
 
 const session = useSessionStore()
@@ -25,6 +26,7 @@ const router = useRouter()
 const documents = ref([])
 const folders = ref([])
 const allFolders = ref([])
+const teams = ref([])
 const currentFolder = ref(null)
 const kind = ref('')
 const title = ref('')
@@ -47,12 +49,20 @@ const folderId = computed(() => {
   const value = Array.isArray(raw) ? raw[0] : raw
   return value && value !== '0' ? String(value) : ''
 })
+const teamId = computed(() => {
+  const raw = route.query.team
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return value && value !== '0' ? String(value) : ''
+})
+const currentTeam = computed(() => teams.value.find((item) => String(item.id) === teamId.value))
+const spaceName = computed(() => currentTeam.value?.name || (teamId.value ? '团队文档' : '我的文档'))
 const searching = computed(() => title.value.trim() !== '')
 const ancestors = computed(() => currentFolder.value?.ancestors || [])
 const initial = computed(() => (session.account?.display_name || session.account?.username || '云').slice(0, 1))
 const emptyTitle = computed(() => {
   if (searching.value) return '没有匹配的内容'
   if (currentFolder.value) return '这个文件夹是空的'
+  if (teamId.value) return '这个团队还没有文档'
   return '还没有文档'
 })
 const emptyText = computed(() => {
@@ -79,28 +89,52 @@ function setView(next) {
   }
 }
 
+function withSpace(body) {
+  if (teamId.value) body.team_id = teamId.value
+  return body
+}
+
+function openSpace(id) {
+  title.value = ''
+  kind.value = ''
+  router.push({ name: 'library', query: id ? { team: String(id) } : {} })
+}
+
 function openFolder(id) {
   title.value = ''
-  router.push(id ? { name: 'library', query: { folder: String(id) } } : { name: 'library' })
+  const query = {}
+  if (teamId.value) query.team = teamId.value
+  if (id) query.folder = String(id)
+  router.push({ name: 'library', query })
+}
+
+async function loadTeams() {
+  try {
+    const result = await searchTeams({ page: 1, page_size: 200 })
+    teams.value = result.data
+  } catch {
+    teams.value = []
+  }
 }
 
 async function load() {
   error.value = ''
   const query = searching.value
   const current = folderId.value
-  const stamp = `${query}|${current}|${kind.value}|${title.value}`
+  const space = teamId.value
+  const stamp = `${query}|${current}|${space}|${kind.value}|${title.value}`
   try {
-    const folderBody = query
+    const folderBody = withSpace(query
       ? { name: title.value.trim(), page: 1, page_size: 200 }
-      : { parent_id: current || '0', page: 1, page_size: 200 }
-    const docBody = { kind: kind.value, title: title.value, page: 1, page_size: 60 }
+      : { parent_id: current || '0', page: 1, page_size: 200 })
+    const docBody = withSpace({ kind: kind.value, title: title.value, page: 1, page_size: 60 })
     if (!query) docBody.folder_id = current || '0'
     const folderPromise = searchFolders(folderBody).catch((err) => {
       if (!query) throw err
       return { data: [], failed: err }
     })
     const [folderPage, docPage] = await Promise.all([folderPromise, searchDocuments(docBody)])
-    if (`${searching.value}|${folderId.value}|${kind.value}|${title.value}` !== stamp) return
+    if (`${searching.value}|${folderId.value}|${teamId.value}|${kind.value}|${title.value}` !== stamp) return
     if (folderPage.failed) error.value = folderPage.failed.message
     folders.value = kind.value && !query ? [] : folderPage.data
     documents.value = docPage.data
@@ -111,21 +145,22 @@ async function load() {
         currentFolder.value = detail.data
       } catch (err) {
         error.value = err.message
-        if (folderId.value === current) router.replace({ name: 'library' })
+        if (folderId.value === current) router.replace({ name: 'library', query: teamId.value ? { team: teamId.value } : {} })
       }
       return
     }
     currentFolder.value = null
   } catch (err) {
-    if (`${searching.value}|${folderId.value}|${kind.value}|${title.value}` !== stamp) return
+    if (`${searching.value}|${folderId.value}|${teamId.value}|${kind.value}|${title.value}` !== stamp) return
     error.value = err.message
+    if (teamId.value && err.message === '团队不存在') router.replace({ name: 'library' })
   }
 }
 
 async function create(nextKind) {
   pending.value = true
   try {
-    const body = { kind: nextKind, title: KINDS[nextKind].untitled }
+    const body = withSpace({ kind: nextKind, title: KINDS[nextKind].untitled })
     if (folderId.value) body.folder_id = folderId.value
     const result = await createDocument(body)
     router.push(`/doc/${result.data.id}`)
@@ -156,7 +191,7 @@ async function sendFile(file) {
   error.value = ''
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    const body = { filename: file.name, content_base64: encodeBase64(bytes) }
+    const body = withSpace({ filename: file.name, content_base64: encodeBase64(bytes) })
     if (folderId.value) body.folder_id = folderId.value
     const result = await importDocument(body)
     title.value = ''
@@ -246,7 +281,7 @@ async function commitDeleteFolder() {
 
 async function commitFolder() {
   try {
-    await createFolder({ name: folderName.value, parent_id: folderId.value || '0' })
+    await createFolder(withSpace({ name: folderName.value, parent_id: folderId.value || '0' }))
     makingFolder.value = false
     folderName.value = ''
     await load()
@@ -260,7 +295,7 @@ async function openMove(item) {
   moveTarget.value = item.folder_id ? String(item.folder_id) : '0'
   error.value = ''
   try {
-    const result = await searchFolders({ page: 1, page_size: 200 })
+    const result = await searchFolders(withSpace({ page: 1, page_size: 200 }))
     allFolders.value = result.data
   } catch (err) {
     error.value = err.message
@@ -302,12 +337,13 @@ function meta(item) {
 }
 
 let timer
-watch([kind, title, folderId], () => {
+watch([kind, title, folderId, teamId], () => {
   clearTimeout(timer)
   timer = setTimeout(load, 250)
 })
 onMounted(() => {
   readView()
+  loadTeams()
   load()
 })
 </script>
@@ -323,13 +359,28 @@ onMounted(() => {
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" fill="none" stroke="#5f6368" stroke-width="1.8"/><path d="M16 16l4 4" stroke="#5f6368" stroke-width="1.8" stroke-linecap="round"/></svg>
         <input data-testid="library-search" v-model="title" placeholder="搜索" />
       </label>
-      <span class="home-user" data-testid="current-user">
+      <router-link class="home-user" to="/account" data-testid="account-link" title="个人中心">
         <i>{{ initial }}</i>
-        {{ session.account?.display_name }}
-      </span>
+        <span data-testid="current-user">{{ session.account?.display_name }}</span>
+      </router-link>
       <button class="text-button" type="button" data-testid="logout" @click="signOut">退出</button>
     </header>
-    <main class="library">
+    <div class="library-frame">
+      <aside class="space-nav" data-testid="space-switch" aria-label="文档库">
+        <h2>个人</h2>
+        <button type="button" data-testid="space-personal" :aria-current="teamId ? null : 'page'" @click="openSpace('')">我的文档</button>
+        <h2>团队</h2>
+        <button
+          v-for="team in teams"
+          :key="team.id"
+          type="button"
+          :data-testid="`space-team-${team.id}`"
+          :aria-current="teamId === String(team.id) ? 'page' : null"
+          @click="openSpace(team.id)"
+        >{{ team.name }}</button>
+        <router-link class="space-link" to="/account" data-testid="manage-teams">管理团队</router-link>
+      </aside>
+      <main class="library">
       <h1>新建</h1>
       <div class="create-row">
         <button type="button" class="create-tile" data-testid="create-word" :disabled="pending" @click="create('word')">
@@ -363,7 +414,7 @@ onMounted(() => {
         <input ref="fileInput" class="file-input" data-testid="upload-input" type="file" accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.json,text/plain,text/csv,application/pdf,application/json" @change="onUpload" />
       </div>
       <nav class="crumbs" data-testid="folder-crumbs" aria-label="文件夹路径">
-        <button type="button" @click="openFolder('')">我的文档</button>
+        <button type="button" @click="openFolder('')">{{ spaceName }}</button>
         <template v-for="item in ancestors" :key="item.id">
           <span>/</span>
           <button type="button" @click="openFolder(item.id)">{{ item.name }}</button>
@@ -373,7 +424,7 @@ onMounted(() => {
           <strong>{{ currentFolder.name }}</strong>
         </template>
       </nav>
-      <p class="search-note" v-if="searching">正在搜索全部文档和文件夹</p>
+      <p class="search-note" v-if="searching">正在搜索当前文档库</p>
       <div class="library-bar">
         <div class="filters">
           <button type="button" :aria-pressed="kind === ''" @click="kind = ''">全部</button>
@@ -454,7 +505,8 @@ onMounted(() => {
         <h2>{{ emptyTitle }}</h2>
         <p class="muted">{{ emptyText }}</p>
       </div>
-    </main>
+      </main>
+    </div>
     <div class="modal-back" v-if="makingFolder">
       <div class="modal">
         <h3>新建文件夹</h3>

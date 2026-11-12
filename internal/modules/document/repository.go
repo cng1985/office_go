@@ -26,6 +26,8 @@ func NewRepository(db *gorm.DB) *Repository {
 
 type detailRow struct {
 	ID        int64
+	OwnerID   int64
+	TeamID    *int64
 	FolderID  *int64
 	Kind      string
 	Title     string
@@ -45,14 +47,14 @@ func (r *Repository) Create(ctx context.Context, request *DocumentCreateRequest)
 	if err != nil {
 		return zero, err
 	}
-	return r.insertNew(ctx, request.Kind, request.Title, request.FolderID, content, "创建文档")
+	return r.insertNew(ctx, request.Kind, request.Title, request.FolderID, request.TeamID, content, "创建文档")
 }
 
-func (r *Repository) Import(ctx context.Context, kind, title string, folderID int64, content []byte) (response.Response[DocumentResponse], error) {
-	return r.insertNew(ctx, kind, title, folderID, content, "上传文件")
+func (r *Repository) Import(ctx context.Context, kind, title string, folderID, teamID int64, content []byte) (response.Response[DocumentResponse], error) {
+	return r.insertNew(ctx, kind, title, folderID, teamID, content, "上传文件")
 }
 
-func (r *Repository) insertNew(ctx context.Context, kind, title string, folderID int64, content []byte, note string) (response.Response[DocumentResponse], error) {
+func (r *Repository) insertNew(ctx context.Context, kind, title string, folderID, teamID int64, content []byte, note string) (response.Response[DocumentResponse], error) {
 	var result response.Response[DocumentResponse]
 	scope, err := requireScope(ctx)
 	if err != nil {
@@ -60,7 +62,10 @@ func (r *Repository) insertNew(ctx context.Context, kind, title string, folderID
 	}
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now().UTC()
-		if err := ensureFolder(tx, scope.ActorID, folderID); err != nil {
+		if err := requireTeam(tx, teamID, scope.ActorID); err != nil {
+			return err
+		}
+		if err := ensureFolderInSpace(tx, scope.ActorID, teamID, folderID); err != nil {
 			return err
 		}
 		entity := &Document{
@@ -73,6 +78,9 @@ func (r *Repository) insertNew(ctx context.Context, kind, title string, folderID
 		}
 		if folderID != 0 {
 			entity.FolderID = &folderID
+		}
+		if teamID != 0 {
+			entity.TeamID = &teamID
 		}
 		if err := tx.Omit(clause.Associations).Create(entity).Error; err != nil {
 			return mapWriteError(err)
@@ -108,8 +116,8 @@ func (r *Repository) Update(ctx context.Context, request *DocumentUpdateRequest)
 			return apperrors.Conflict(10004, "文档已被其他编辑更新，请刷新后重试")
 		}
 		now := time.Now().UTC()
-		res := tx.Model(&Document{}).
-			Where("id = ? AND owner_id = ? AND revision = ?", doc.ID, scope.ActorID, doc.Revision).
+		res := guardDocument(tx, doc, scope.ActorID).
+			Where("revision = ?", doc.Revision).
 			Updates(map[string]any{
 				"title":      request.Title,
 				"revision":   doc.Revision + 1,
@@ -161,8 +169,11 @@ func (r *Repository) Search(ctx context.Context, search *DocumentSearch) (respon
 	if err != nil {
 		return result, err
 	}
+	if err := requireTeam(r.db.WithContext(ctx), search.TeamID, scope.ActorID); err != nil {
+		return result, err
+	}
 	filtered := func() *gorm.DB {
-		query := r.db.WithContext(ctx).Table("office_document AS d").Where("d.owner_id = ?", scope.ActorID)
+		query := applySpace(r.db.WithContext(ctx).Table("office_document AS d"), "d", scope.ActorID, search.TeamID)
 		if search.Kind != "" {
 			query = query.Where("d.kind = ?", search.Kind)
 		}
@@ -219,7 +230,7 @@ func (r *Repository) Delete(ctx context.Context, request *DocumentIDRequest) (re
 		if err := tx.Where("document_id = ?", row.ID).Delete(&DocumentVersion{}).Error; err != nil {
 			return apperrors.WrapInternal(err)
 		}
-		res := tx.Where("id = ? AND owner_id = ?", row.ID, scope.ActorID).Delete(&Document{})
+		res := guardDocument(tx, &Document{ID: row.ID, OwnerID: row.OwnerID, TeamID: row.TeamID}, scope.ActorID).Delete(&Document{})
 		if res.Error != nil {
 			return apperrors.WrapInternal(res.Error)
 		}
@@ -269,8 +280,8 @@ func (r *Repository) Save(ctx context.Context, request *DocumentSaveRequest) (re
 			return nil
 		}
 		now := time.Now().UTC()
-		res := tx.Model(&Document{}).
-			Where("id = ? AND owner_id = ? AND revision = ?", doc.ID, scope.ActorID, doc.Revision).
+		res := guardDocument(tx, doc, scope.ActorID).
+			Where("revision = ?", doc.Revision).
 			Updates(map[string]any{
 				"title":      request.Title,
 				"revision":   doc.Revision + 1,
@@ -387,8 +398,8 @@ func (r *Repository) Restore(ctx context.Context, request *DocumentRestoreReques
 			note = fmt.Sprintf("恢复至版本 %d", source.VersionNo)
 		}
 		now := time.Now().UTC()
-		res := tx.Model(&Document{}).
-			Where("id = ? AND owner_id = ? AND revision = ?", doc.ID, scope.ActorID, doc.Revision).
+		res := guardDocument(tx, doc, scope.ActorID).
+			Where("revision = ?", doc.Revision).
 			Updates(map[string]any{
 				"title":      source.Title,
 				"revision":   doc.Revision + 1,
@@ -454,30 +465,36 @@ func insertVersion(tx *gorm.DB, doc *Document, content []byte, note string, acto
 	return version, nil
 }
 
-func loadOwned(tx *gorm.DB, id, ownerID int64) (*Document, error) {
+func loadOwned(tx *gorm.DB, id, actorID int64) (*Document, error) {
 	var doc Document
-	err := tx.Where("id = ? AND owner_id = ?", id, ownerID).Take(&doc).Error
+	err := tx.Where("id = ?", id).Take(&doc).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperrors.NotFound(404, "文档不存在")
 	}
 	if err != nil {
 		return nil, apperrors.WrapInternal(err)
 	}
+	if err := allowDocument(tx, &doc, actorID); err != nil {
+		return nil, err
+	}
 	return &doc, nil
 }
 
-func loadDetail(tx *gorm.DB, id, ownerID int64) (*detailRow, error) {
+func loadDetail(tx *gorm.DB, id, actorID int64) (*detailRow, error) {
 	var row detailRow
 	err := tx.Table("office_document AS d").
-		Select("d.id, d.folder_id, d.kind, d.title, d.revision, d.created_at, d.updated_at, v.id AS version_id, v.version_no, v.content, v.byte_size, v.note").
+		Select("d.id, d.owner_id, d.team_id, d.folder_id, d.kind, d.title, d.revision, d.created_at, d.updated_at, v.id AS version_id, v.version_no, v.content, v.byte_size, v.note").
 		Joins("JOIN office_document_version AS v ON v.id = d.current_version_id").
-		Where("d.id = ? AND d.owner_id = ?", id, ownerID).
+		Where("d.id = ?", id).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperrors.NotFound(404, "文档不存在")
 	}
 	if err != nil {
 		return nil, apperrors.WrapInternal(err)
+	}
+	if err := allowDocument(tx, &Document{ID: row.ID, OwnerID: row.OwnerID, TeamID: row.TeamID}, actorID); err != nil {
+		return nil, err
 	}
 	return &row, nil
 }
