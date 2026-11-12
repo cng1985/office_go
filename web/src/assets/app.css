@@ -367,8 +367,8 @@ input:focus, textarea:focus { border-color: var(--gold); }
   background: #f8f9fa; border-right: 1px solid #e0e0e0; min-height: calc(100vh - 64px);
 }
 .folder-tree {
-  width: auto; flex: 1; background: transparent; border-right: 0;
-  padding: 4px 8px 24px; overflow: auto;
+  width: auto; flex: 0 1 auto; max-height: calc(100vh - 140px); background: transparent; border-right: 0;
+  padding: 12px 8px 8px; overflow: auto;
 }
 .tree-row {
   display: flex; align-items: center; width: 100%; min-height: 28px; border-radius: 4px; color: #202124;
@@ -385,6 +385,11 @@ button.tree-row { border: 0; background: transparent; text-align: left; padding:
 .tree-folder { width: 16px; height: 12px; background: #f9ab00; border-radius: 1px 2px 2px 2px; position: relative; flex: none; }
 .tree-folder:before { content: ""; position: absolute; left: 0; top: -3px; width: 7px; height: 3px; background: #f9ab00; border-radius: 2px 2px 0 0; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.tree-manage {
+  display: flex; align-items: center; flex: none; margin: 4px 8px 16px; padding: 8px 12px;
+  border-radius: 4px; color: #1a73e8; text-decoration: none; font-size: 13px;
+}
+.tree-manage:hover { background: #e8eaed; }
 .library-frame .library { max-width: none; flex: 1; min-width: 0; }
 .page-break-line span { background: #fff; padding: 0 8px; position: relative; top: -10px; }
 .word-suggest { display: flex; gap: 8px; align-items: center; margin-left: 28px; }
@@ -744,21 +749,23 @@ button.tree-row { border: 0; background: transparent; text-align: left; padding:
 }
 .modal { width: min(440px, 100%); background: var(--card); border-radius: 16px; padding: 20px; }
 
-.space-nav {
-  width: auto; flex: none; padding: 8px 8px 0; border-right: 0; background: transparent;
-}
-.space-nav h2 { margin: 14px 12px 6px; font-size: 12px; font-weight: 500; color: #5f6368; }
-.space-nav button, .space-nav a.space-link {
-  display: flex; align-items: center; width: 100%; height: 36px; border: 0; background: transparent;
-  border-radius: 0 18px 18px 0; padding: 0 16px; color: #202124; font-size: 14px; text-align: left;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.space-nav button[aria-current="page"] { background: #e8f0fe; color: #1967d2; }
-.space-nav button:hover, .space-nav a.space-link:hover { background: #f1f3f4; }
-.space-nav a.space-link { color: #1a73e8; margin-top: 8px; text-decoration: none; }
 .account-page { padding: 28px 32px 64px; max-width: 980px; display: grid; gap: 16px; }
+.account-page.teams-page { max-width: 1080px; }
 .account-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr); gap: 16px; align-items: start; }
-.account-stack { display: grid; gap: 16px; }
+.account-stack { display: grid; gap: 16px; max-width: 560px; }
+.teams-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap; }
+.teams-head h1 { margin: 0; }
+.teams-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
+.team-detail { display: grid; gap: 16px; }
+.team-index input { width: 100%; }
+.team-picks { display: grid; }
+.team-pick {
+  display: grid; gap: 2px; padding: 10px 12px; border-radius: 8px; text-decoration: none; color: #202124;
+}
+.team-pick span { color: #5f6368; font-size: 12px; }
+.team-pick:hover { background: #f1f3f4; }
+.team-pick[aria-current="page"], .team-pick[aria-current="page"]:hover { background: #e8f0fe; }
+.account-jump { text-decoration: none; }
 .account-page h1 { margin: 0; font-size: 22px; font-weight: 500; color: #202124; }
 .account-card { background: #fff; border: 1px solid #dadce0; border-radius: 8px; padding: 20px; display: grid; gap: 12px; }
 .account-card h2 { margin: 0; font-size: 16px; font-weight: 500; }
@@ -791,11 +798,9 @@ button.tree-row { border: 0; background: transparent; text-align: left; padding:
   .doc-grid { grid-template-columns: 1fr 1fr; }
   .library-bar { align-items: stretch; flex-wrap: wrap; }
   .library-frame { flex-direction: column; min-height: 0; }
-  .library-side { width: 100%; min-height: 0; border-right: 0; }
-  .space-nav { width: 100%; display: flex; gap: 8px; overflow: auto; border-right: 0; border-bottom: 1px solid #e0e0e0; padding: 8px; }
-  .space-nav h2 { display: none; }
-  .space-nav button, .space-nav a.space-link { width: auto; flex: none; border-radius: 999px; margin: 0; }
+  .library-side { width: 100%; min-height: 0; border-right: 0; border-bottom: 1px solid #e0e0e0; }
   .account-page { padding: 20px 16px 48px; }
+  .teams-layout { grid-template-columns: 1fr; }
   .account-grid { grid-template-columns: 1fr; }
   .view-switch { margin-left: auto; }
   .editor-body, .ppt-layout, .slides-workspace { grid-template-columns: 1fr; }

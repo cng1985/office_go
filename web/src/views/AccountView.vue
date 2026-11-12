@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { changePassword, createTeam, searchTeams, updateProfile } from '../api/team'
+import { changePassword, updateProfile } from '../api/team'
 import { useSessionStore } from '../stores/session'
 
 const session = useSessionStore()
@@ -9,21 +9,10 @@ const router = useRouter()
 const displayName = ref(session.account?.display_name || '')
 const currentPassword = ref('')
 const nextPassword = ref('')
-const teams = ref([])
-const teamName = ref('')
 const error = ref('')
 const notice = ref('')
 const pending = ref(false)
 const initial = computed(() => (session.account?.display_name || session.account?.username || '云').slice(0, 1))
-
-function roleLabel(role) {
-  return role === 'owner' ? '所有者' : '成员'
-}
-
-async function loadTeams() {
-  const result = await searchTeams({ page: 1, page_size: 200 })
-  teams.value = result.data
-}
 
 async function saveProfile() {
   pending.value = true
@@ -57,33 +46,11 @@ async function savePassword() {
   }
 }
 
-async function create() {
-  pending.value = true
-  error.value = ''
-  notice.value = ''
-  try {
-    const result = await createTeam({ name: teamName.value })
-    teamName.value = ''
-    router.push(`/team/${result.data.id}`)
-  } catch (err) {
-    error.value = err.message
-  } finally {
-    pending.value = false
-  }
-}
-
 async function signOut() {
   await session.logout()
   router.push('/login')
 }
 
-onMounted(async () => {
-  try {
-    await loadTeams()
-  } catch (err) {
-    error.value = err.message
-  }
-})
 </script>
 
 <template>
@@ -101,10 +68,12 @@ onMounted(async () => {
       <button class="text-button" type="button" data-testid="logout" @click="signOut">退出</button>
     </header>
     <main class="account-page" data-testid="account-page">
-      <h1>个人中心</h1>
+      <div class="teams-head">
+        <h1>个人中心</h1>
+        <router-link class="ghost account-jump" to="/teams" data-testid="account-teams">团队管理</router-link>
+      </div>
       <p class="error" v-if="error">{{ error }}</p>
       <p class="notice" v-if="notice" data-testid="account-notice">{{ notice }}</p>
-      <div class="account-grid">
       <div class="account-stack">
       <section class="account-card">
         <h2>资料</h2>
@@ -133,22 +102,6 @@ onMounted(async () => {
         <div>
           <button class="primary" type="button" data-testid="password-save" :disabled="pending" @click="savePassword">更新密码</button>
         </div>
-      </section>
-      </div>
-      <section class="account-card">
-        <h2>团队</h2>
-        <p class="muted">团队成员可以一起新建、编辑和整理文档。个人文档仍然只有自己能看到。</p>
-        <form class="team-create" @submit.prevent="create">
-          <input data-testid="team-name" v-model="teamName" placeholder="团队名称" maxlength="40" />
-          <button class="primary" type="submit" data-testid="team-create" :disabled="pending">创建团队</button>
-        </form>
-        <div v-if="teams.length" class="team-list">
-          <router-link v-for="team in teams" :key="team.id" class="account-row" :to="`/team/${team.id}`" data-testid="team-link">
-            <strong>{{ team.name }}</strong>
-            <span>{{ roleLabel(team.role) }}</span>
-          </router-link>
-        </div>
-        <p class="muted" v-else>还没有团队。创建一个，再邀请同事一起编辑。</p>
       </section>
       </div>
     </main>
