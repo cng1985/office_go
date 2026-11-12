@@ -16,7 +16,6 @@ import (
 const (
 	maxPDFObjects   = 20000
 	maxPDFPages     = 300
-	maxPDFStream    = 8 << 20
 	maxPDFFormCalls = 4096
 	maxPDFRuns      = 65536
 	maxPDFOps       = 2000000
@@ -504,13 +503,13 @@ func (p *pdfParser) streamBytes(obj pdfObj) ([]byte, error) {
 	}
 	if length.kind == objNum {
 		n := int(length.num)
-		if n < 0 || n > maxPDFStream || p.i+n > len(p.b) {
+		if n < 0 || p.i > len(p.b) || n > len(p.b)-p.i {
 			return nil, errPDFSyntax
 		}
 		return p.b[p.i : p.i+n], nil
 	}
 	at := bytes.Index(p.b[p.i:], []byte("endstream"))
-	if at < 0 || at > maxPDFStream {
+	if at < 0 {
 		return nil, errPDFSyntax
 	}
 	raw := p.b[p.i : p.i+at]
@@ -566,8 +565,16 @@ func inflatePDF(data []byte) ([]byte, error) {
 		return nil, errPDFSyntax
 	}
 	defer reader.Close()
-	out, err := io.ReadAll(io.LimitReader(reader, maxPDFStream+1))
-	if err != nil || len(out) > maxPDFStream {
+	limit := expansionLimit(len(data))
+	readCap := limit
+	if readCap < math.MaxInt64 {
+		readCap++
+	}
+	out, err := io.ReadAll(io.LimitReader(reader, readCap))
+	if int64(len(out)) > limit {
+		return nil, errPDFLimit
+	}
+	if err != nil {
 		return nil, errPDFSyntax
 	}
 	return out, nil
@@ -1078,9 +1085,6 @@ func (p *pdfParser) parseLiteral() ([]byte, error) {
 			}
 		default:
 			out = append(out, c)
-		}
-		if len(out) > maxPDFStream {
-			return nil, errPDFSyntax
 		}
 	}
 	if depth != 0 {

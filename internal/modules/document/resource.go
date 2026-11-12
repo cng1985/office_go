@@ -355,9 +355,6 @@ func decodeUpload(encoded string) ([]byte, error) {
 	if cleaned == "" {
 		return nil, apperrors.BadRequest(400, "文件内容为空")
 	}
-	if len(cleaned) > (1<<20)*2 {
-		return nil, apperrors.TooLarge(413, "文件超过 1MB 限制")
-	}
 	raw, err := base64.StdEncoding.DecodeString(cleaned)
 	if err != nil {
 		raw, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(cleaned, "="))
@@ -367,9 +364,6 @@ func decodeUpload(encoded string) ([]byte, error) {
 	}
 	if len(raw) == 0 {
 		return nil, apperrors.BadRequest(400, "文件内容为空")
-	}
-	if len(raw) > 1<<20 {
-		return nil, apperrors.TooLarge(413, "文件超过 1MB 限制")
 	}
 	return raw, nil
 }

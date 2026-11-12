@@ -74,14 +74,7 @@ func exportPDF(content []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := writePDF(pages, sub, images)
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxUploadBytes {
-		return nil, apperrors.TooLarge(413, "导出的 PDF 超过 1MB 限制")
-	}
-	return body, nil
+	return writePDF(pages, sub, images)
 }
 
 func pdfBullet(face *ttfFont) rune {
@@ -602,9 +595,6 @@ func pdfRuneHex(r rune) string {
 }
 
 func importPDF(filename string, body []byte) (string, string, []byte, error) {
-	if len(body) > maxUploadBytes {
-		return "", "", nil, apperrors.TooLarge(413, "文件超过 1MB 限制")
-	}
 	head := body
 	if len(head) > 1024 {
 		head = head[:1024]

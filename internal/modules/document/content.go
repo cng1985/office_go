@@ -15,10 +15,9 @@ import (
 )
 
 const (
-	maxContentBytes = 1 << 20
-	maxWordBlocks   = 4000
-	maxExcelRows    = 1000
-	maxExcelCols    = 100
+	maxWordBlocks = 4000
+	maxExcelRows  = 1000
+	maxExcelCols  = 100
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
@@ -126,9 +125,6 @@ func Canonical(kind string, raw []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil, apperrors.BadRequest(400, "文档内容不能为空")
 	}
-	if len(raw) > maxContentBytes {
-		return nil, apperrors.TooLarge(413, "文档内容超过 1MB 限制")
-	}
 	switch kind {
 	case KindWord, KindPDF:
 		var content wordContent
@@ -200,11 +196,7 @@ func marshalContent(value any) ([]byte, error) {
 	if err := encoder.Encode(value); err != nil {
 		return nil, apperrors.WrapInternal(err)
 	}
-	encoded := bytes.TrimRight(buf.Bytes(), "\n")
-	if len(encoded) > maxContentBytes {
-		return nil, apperrors.TooLarge(413, "文档内容超过 1MB 限制")
-	}
-	return encoded, nil
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func validateWord(content *wordContent) error {

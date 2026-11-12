@@ -9,8 +9,8 @@ server:
   shutdown_timeout: 30s
   request_timeout: 30s
   sse_timeout: 15m
-  # 文档正文使用 JSON 提交，默认 2MiB 不够，项目放宽到 8MiB。业务层仍限制规范化正文不超过 1MiB。
-  max_body_bytes: 8388608
+  # 0 表示不限制请求体。上传和文档正文不再按文件大小拒绝。
+  max_body_bytes: 0
   trusted_proxies: []
 database:
   enabled: true

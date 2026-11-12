@@ -61,7 +61,9 @@ func NewGlobal(cfg *config.Config, logger *slog.Logger) GlobalOut {
 			}
 		}()
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, cfg.Server.MaxBodyBytes)
+			if cfg.Server.MaxBodyBytes > 0 {
+				c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, cfg.Server.MaxBodyBytes)
+			}
 			if err := checkOrigin(c); err != nil {
 				response.HandleError(c, err)
 				logRequest(logger, c, requestID, start)

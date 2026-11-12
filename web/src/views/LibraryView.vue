@@ -330,10 +330,6 @@ async function onUpload(event) {
 }
 
 async function sendFile(file) {
-  if (file.size > 1024 * 1024) {
-    error.value = '文件超过 1MB 限制'
-    return
-  }
   pending.value = true
   error.value = ''
   try {

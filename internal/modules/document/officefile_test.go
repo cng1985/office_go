@@ -1,9 +1,12 @@
 package document
 
 import (
+	"archive/zip"
 	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -492,4 +495,85 @@ func extOf(kind string) string {
 	default:
 		return ".pptx"
 	}
+}
+
+func TestZipBombIsRejected(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writer, err := zw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := bytes.Repeat([]byte{0}, 1<<20)
+	for i := 0; i < 9; i++ {
+		if _, err := writer.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() >= 1<<20 {
+		t.Fatalf("fixture did not compress: %d", buf.Len())
+	}
+	if _, err := readZip(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "文件过大或内容过多") {
+		t.Fatal(err)
+	}
+	var packed bytes.Buffer
+	z, err := zlib.NewWriterLevel(&packed, zlib.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := z.Write(bytes.Repeat([]byte{0}, 9<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inflatePDF(packed.Bytes()); !errors.Is(err, errPDFLimit) {
+		t.Fatal(err)
+	}
+}
+
+func TestLargeUploadIsNotRejectedForSize(t *testing.T) {
+	raw := bytes.Repeat([]byte("A"), (1<<20)+128)
+	got, err := decodeUpload(base64.StdEncoding.EncodeToString(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Fatalf("decoded %d bytes", len(got))
+	}
+	body := largeDocx(t, "大文件正文")
+	if len(body) <= 1<<20 {
+		t.Fatalf("fixture = %d", len(body))
+	}
+	kind, title, content, err := ImportFile("大文件.docx", body)
+	if err != nil || kind != KindWord || title != "大文件" || !bytes.Contains(content, []byte("大文件正文")) {
+		t.Fatalf("large docx = %s %s %s %v", kind, title, content, err)
+	}
+}
+
+func largeDocx(t *testing.T, text string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	files := map[string]string{
+		"word/document.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>` + text + `</w:t></w:r></w:p></w:body></w:document>`,
+		"word/pad.bin":      strings.Repeat("x", 1<<20+128),
+	}
+	for name, content := range files {
+		header := &zip.FileHeader{Name: name, Method: zip.Store}
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
