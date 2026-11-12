@@ -95,7 +95,12 @@ async function load() {
       : { parent_id: current || '0', page: 1, page_size: 200 }
     const docBody = { kind: kind.value, title: title.value, page: 1, page_size: 60 }
     if (!query) docBody.folder_id = current || '0'
-    const [folderPage, docPage] = await Promise.all([searchFolders(folderBody), searchDocuments(docBody)])
+    const folderPromise = searchFolders(folderBody).catch((err) => {
+      if (!query) throw err
+      error.value = err.message
+      return { data: [] }
+    })
+    const [folderPage, docPage] = await Promise.all([folderPromise, searchDocuments(docBody)])
     if (`${searching.value}|${folderId.value}|${kind.value}|${title.value}` !== stamp) return
     folders.value = kind.value && !query ? [] : folderPage.data
     documents.value = docPage.data
