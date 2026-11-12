@@ -1,7 +1,6 @@
-import { columnLabel, displayCell, mapFormulaRefs, parseRef, replaceSheetNames } from './formula.js'
+import { MAX_COL as MAX_COLS, MAX_ROW as MAX_ROWS, columnLabel, displayCell, mapFormulaRefs, parseRef, replaceSheetNames } from './formula.js'
 
-export const MAX_ROWS = 120
-export const MAX_COLS = 30
+export { MAX_COLS, MAX_ROWS }
 export const MAX_SHEETS = 20
 export const MAX_INPUT = 2000
 
@@ -40,8 +39,61 @@ export function normalizeWorkbook(content) {
   return workbook
 }
 
+const cellIndexes = new WeakMap()
+
+function dropCellIndex(sheet) {
+  if (sheet?.cells) cellIndexes.delete(sheet.cells)
+}
+
 export function findCell(sheet, row, col) {
-  return (sheet?.cells || []).find((item) => item.row === row && item.col === col) || null
+  const cells = sheet?.cells
+  if (!cells) return null
+  let map = cellIndexes.get(cells)
+  if (!map) {
+    map = new Map()
+    for (const item of cells) map.set(`${item.row},${item.col}`, item)
+    cellIndexes.set(cells, map)
+  }
+  return map.get(`${row},${col}`) || null
+}
+
+export function rowWindow({ rowCount, scrollTop, viewHeight, rowHeight = 21, buffer = 6, merges = [] }) {
+  const total = Math.max(1, rowCount || 1)
+  const height = rowHeight > 0 ? rowHeight : 21
+  const span = Math.max(1, Math.ceil(Math.max(height, viewHeight) / height) + buffer * 2)
+  const maxScroll = Math.max(0, total * height - Math.max(height, viewHeight))
+  const scrolled = Math.min(Math.max(0, scrollTop), maxScroll)
+  const first = Math.min(total, Math.max(1, Math.floor(scrolled / height) + 1 - buffer))
+  let start = first
+  let end = Math.min(total, first + span - 1)
+  const anchors = []
+  for (const cell of merges) {
+    const rows = Number(cell?.merge_rows) || 1
+    if (rows > 1) anchors.push([Number(cell.row) || 1, (Number(cell.row) || 1) + rows - 1])
+  }
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const [top, bottom] of anchors) {
+      if (bottom < start || top > end) continue
+      const nextStart = Math.max(1, top)
+      const nextEnd = Math.min(total, bottom)
+      if (nextStart < start) {
+        start = nextStart
+        grew = true
+      }
+      if (nextEnd > end) {
+        end = nextEnd
+        grew = true
+      }
+    }
+  }
+  return {
+    start,
+    end,
+    padTop: (start - 1) * height,
+    padBottom: Math.max(0, total - end) * height,
+  }
 }
 
 export function putCell(sheet, cell) {
@@ -90,6 +142,7 @@ export function insertRows(sheet, at, count = 1, workbook = null) {
     cell.input = shiftStructural(cell.input, 'row', at, count, sheet.name, false, 'insert')
   }
   syncQualifiedRefs(workbook, sheet, 'row', at, count, 'insert')
+  dropCellIndex(sheet)
   return true
 }
 
@@ -103,6 +156,7 @@ export function deleteRows(sheet, at, count = 1, workbook = null) {
   }
   sheet.row_count -= count
   syncQualifiedRefs(workbook, sheet, 'row', at, count, 'delete')
+  dropCellIndex(sheet)
   return true
 }
 
@@ -121,6 +175,7 @@ export function insertCols(sheet, at, count = 1, workbook = null) {
     cell.input = shiftStructural(cell.input, 'col', at, count, sheet.name, false, 'insert')
   }
   syncQualifiedRefs(workbook, sheet, 'col', at, count, 'insert')
+  dropCellIndex(sheet)
   return true
 }
 
@@ -140,6 +195,7 @@ export function deleteCols(sheet, at, count = 1, workbook = null) {
   }
   sheet.col_count -= count
   syncQualifiedRefs(workbook, sheet, 'col', at, count, 'delete')
+  dropCellIndex(sheet)
   return true
 }
 

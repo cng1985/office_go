@@ -6,15 +6,18 @@ import {
   fillRange,
   findCell,
   growSheet,
+  insertCols,
   insertRows,
   normalizeWorkbook,
   pasteCells,
+  rowWindow,
   pasteCut,
   pasteValues,
   renameSheetRefs,
   shiftFormula,
   sortRows,
   stepCell,
+  writeInput,
 } from './excel.js'
 
 test('legacy sheet becomes a workbook', () => {
@@ -227,6 +230,42 @@ test('arrow movement skips coordinates covered by a merge', () => {
   assert.deepEqual(stepCell(sheet, 1, 3, 0, -1), { row: 1, col: 1 })
   assert.deepEqual(stepCell(sheet, 1, 1, 1, 0), { row: 3, col: 1 })
   assert.deepEqual(stepCell(sheet, 1, 1, 0, -1), { row: 1, col: 1 })
+})
+
+test('lookup follows cells after a row or column is inserted', () => {
+  const sheet = { row_count: 4, col_count: 3, cells: [{ row: 1, col: 1, input: '甲' }] }
+  assert.equal(findCell(sheet, 1, 1).input, '甲')
+  assert.equal(insertRows(sheet, 1, 1), true)
+  assert.equal(findCell(sheet, 1, 1), null)
+  assert.equal(findCell(sheet, 2, 1).input, '甲')
+  assert.equal(writeInput(sheet, 1, 1, '甲'), true)
+  assert.equal(findCell(sheet, 1, 1).input, '甲')
+  assert.equal(findCell(sheet, 2, 1).input, '甲')
+  assert.equal(insertCols(sheet, 1, 1), true)
+  assert.equal(findCell(sheet, 1, 1), null)
+  assert.equal(findCell(sheet, 1, 2).input, '甲')
+})
+
+test('a scrolled window stays inside a shorter row list', () => {
+  const frame = rowWindow({ rowCount: 100, scrollTop: 18000, viewHeight: 400 })
+  assert.ok(frame.start >= 1)
+  assert.ok(frame.start <= frame.end)
+  assert.ok(frame.end <= 100)
+  assert.equal(frame.padTop, (frame.start - 1) * 21)
+  assert.equal(frame.padTop + (frame.end - frame.start + 1) * 21 + frame.padBottom, 100 * 21)
+})
+
+test('a tall sheet window keeps a merge that crosses the top', () => {
+  const frame = rowWindow({
+    rowCount: 1000,
+    scrollTop: 21 * 40,
+    viewHeight: 21 * 20,
+    merges: [{ row: 30, merge_rows: 20 }],
+  })
+  assert.ok(frame.start <= 30)
+  assert.ok(frame.end >= 49)
+  assert.equal(frame.padTop, (frame.start - 1) * 21)
+  assert.equal(frame.padBottom, (1000 - frame.end) * 21)
 })
 
 test('paste shifts formulas from their original cells', () => {
