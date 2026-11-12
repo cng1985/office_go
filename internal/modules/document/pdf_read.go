@@ -50,6 +50,7 @@ type pdfObj struct {
 	ref       int
 	stream    []byte
 	hasStream bool
+	image     []byte
 }
 
 type pdfLoc struct {
@@ -58,29 +59,32 @@ type pdfLoc struct {
 }
 
 type pdfDoc struct {
-	data      []byte
-	refs      map[int]pdfLoc
-	cache     map[int]pdfObj
-	loading   map[int]bool
-	seenXRef  map[int]bool
-	seenNode  map[int]bool
-	root      int
-	encrypted bool
-	depth     int
-	formCalls int
-	runCount  int
-	ops       int
+	data       []byte
+	refs       map[int]pdfLoc
+	cache      map[int]pdfObj
+	loading    map[int]bool
+	seenXRef   map[int]bool
+	seenNode   map[int]bool
+	root       int
+	encrypted  bool
+	depth      int
+	formCalls  int
+	runCount   int
+	ops        int
+	imageBytes int
 }
 
 type pdfPageText struct {
-	width float64
-	lines []pdfTextLine
+	width  float64
+	lines  []pdfTextLine
+	images []pdfPlacedImage
 }
 
 type pdfTextLine struct {
 	text string
 	size float64
 	x    float64
+	y    float64
 }
 
 type pdfEnc struct {
@@ -445,8 +449,11 @@ func (d *pdfDoc) parseIndirect(p *pdfParser) (pdfObj, error) {
 	if err != nil {
 		return pdfObj{}, err
 	}
-	// 图片流不参与文字提取。先看子类型，避免 DCTDecode 等图片过滤器把整份文件判成无法读取。
+	// 图片单独转成 JPEG。过滤器失败时丢掉这一张，避免 DCTDecode 把整份文件判成无法读取。
 	if obj.dict["Subtype"].text == "Image" {
+		if raw, err := rawPDFStream(p, obj); err == nil {
+			obj.image = imageFromPDFStream(obj, raw)
+		}
 		return obj, nil
 	}
 	p.skip()
@@ -470,6 +477,20 @@ func (d *pdfDoc) parseIndirect(p *pdfParser) (pdfObj, error) {
 	obj.stream = decoded
 	obj.hasStream = true
 	return obj, nil
+}
+
+func rawPDFStream(p *pdfParser, obj pdfObj) ([]byte, error) {
+	p.skip()
+	if !p.consumeWord("stream") {
+		return nil, errPDFSyntax
+	}
+	if p.i < len(p.b) && p.b[p.i] == '\r' {
+		p.i++
+	}
+	if p.i < len(p.b) && p.b[p.i] == '\n' {
+		p.i++
+	}
+	return p.streamBytes(obj)
 }
 
 func (p *pdfParser) streamBytes(obj pdfObj) ([]byte, error) {
@@ -657,11 +678,12 @@ func (d *pdfDoc) walk(id int, inherited pdfObj, width float64, depth int, out *[
 	if len(*out) >= maxPDFPages {
 		return errPDFSyntax
 	}
-	lines, err := d.readPage(node, inherited)
+	page, err := d.readPage(node, inherited)
 	if err != nil {
 		return err
 	}
-	*out = append(*out, pdfPageText{width: width, lines: lines})
+	page.width = width
+	*out = append(*out, page)
 	return nil
 }
 
@@ -683,22 +705,22 @@ func (d *pdfDoc) concrete(obj pdfObj) (pdfObj, error) {
 	return d.load(obj.ref)
 }
 
-func (d *pdfDoc) readPage(page, resources pdfObj) ([]pdfTextLine, error) {
+func (d *pdfDoc) readPage(page, resources pdfObj) (pdfPageText, error) {
 	res, err := d.parseResources(resources)
 	if err != nil {
-		return nil, err
+		return pdfPageText{}, err
 	}
 	streams, err := d.pageStreams(page)
 	if err != nil {
-		return nil, err
+		return pdfPageText{}, err
 	}
 	interp := &pdfInterp{doc: d, res: res, ctm: identMat(), tm: identMat(), tlm: identMat(), fontSize: 12}
 	for _, stream := range streams {
 		if err := interp.run(stream, res); err != nil {
-			return nil, err
+			return pdfPageText{}, err
 		}
 	}
-	return clusterRuns(interp.runs), nil
+	return pdfPageText{lines: clusterRuns(interp.runs), images: interp.images}, nil
 }
 
 func (d *pdfDoc) pageStreams(page pdfObj) ([][]byte, error) {
@@ -1453,6 +1475,7 @@ type pdfInterp struct {
 	fontSize float64
 	leading  float64
 	runs     []pdfRun
+	images   []pdfPlacedImage
 	depth    int
 	seenForm map[int]bool
 }
@@ -1648,7 +1671,10 @@ func (in *pdfInterp) doForm(name string) error {
 		}
 		return err
 	}
-	if obj.dict["Subtype"].text == "Image" || !obj.hasStream {
+	if obj.dict["Subtype"].text == "Image" {
+		return in.placeImage(obj)
+	}
+	if !obj.hasStream {
 		return nil
 	}
 	if obj.dict["Subtype"].text != "Form" && obj.dict["BBox"].kind != objArray {
@@ -1684,8 +1710,10 @@ func (in *pdfInterp) doForm(name string) error {
 	in.gs = nil
 	err = in.run(obj.stream, res)
 	runs := in.runs
+	images := in.images
 	*in = saved
 	in.runs = runs
+	in.images = images
 	return err
 }
 
@@ -1769,7 +1797,7 @@ func clusterRuns(runs []pdfRun) []pdfTextLine {
 		if text == "" {
 			return
 		}
-		lines = append(lines, pdfTextLine{text: text, size: lineSize, x: lineX})
+		lines = append(lines, pdfTextLine{text: text, size: lineSize, x: lineX, y: lineY})
 	}
 	for _, run := range ordered {
 		if !have {

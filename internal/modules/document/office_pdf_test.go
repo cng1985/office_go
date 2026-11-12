@@ -2,10 +2,14 @@ package document
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"strings"
 	"testing"
@@ -381,3 +385,222 @@ func prevXRefPDF() []byte {
 	fmt.Fprintf(&buf, "trailer\n<< /Size 6 /Root 1 0 R /Prev %d >>\nstartxref\n%d\n%%%%EOF\n", old, start)
 	return buf.Bytes()
 }
+
+func tinyJPEG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: 220, G: 30, B: 40, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestPDFImportsEmbeddedImages(t *testing.T) {
+	jpegBytes := tinyJPEG(t)
+	content := "q 120 0 0 80 72 640 cm /Im0 Do Q\nBT (Hello) Tj ET"
+	imageObj := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream", len(jpegBytes), jpegBytes)
+	page := "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>"
+	body := fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content)
+	_, _, got, err := ImportFile("photo.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		page,
+		body,
+		imageObj,
+	}, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc wordContent
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Blocks) < 2 || doc.Blocks[0].Type != "image" || !strings.HasPrefix(doc.Blocks[0].Image, "data:image/jpeg;base64,") {
+		t.Fatalf("image order %v", pdfBlockTexts(t, got))
+	}
+	if !bytes.Contains(got, []byte("Hello")) {
+		t.Fatalf("missing text %s", got)
+	}
+	exported, err := exportPDF(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, again, err := ImportFile("out.pdf", exported)
+	if err != nil || !bytes.Contains(again, []byte("data:image/jpeg;base64,")) || !bytes.Contains(again, []byte("Hello")) {
+		t.Fatal(err, string(again))
+	}
+
+	only := "q 80 0 0 60 100 500 cm /Im0 Do Q"
+	_, _, imageOnly, err := ImportFile("only.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		page,
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(only), only),
+		imageObj,
+	}, ""))
+	if err != nil || !bytes.Contains(imageOnly, []byte(`"type":"image"`)) {
+		t.Fatal(err, string(imageOnly))
+	}
+
+	pixels := []byte{255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0}
+	var zbuf bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&zbuf, zlib.BestSpeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(pixels); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := zbuf.Bytes()
+	flate := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream", len(raw), raw)
+	flatContent := "q 40 0 0 40 100 500 cm /Im0 Do Q"
+	_, _, flatGot, err := ImportFile("flat.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		page,
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(flatContent), flatContent),
+		flate,
+	}, ""))
+	if err != nil || !bytes.Contains(flatGot, []byte("data:image/jpeg;base64,")) {
+		t.Fatal(err, string(flatGot))
+	}
+
+	pageText := "BT 1 0 0 1 72 700 Tm (Page) Tj ET\n/Fm Do"
+	form := "q 30 0 0 30 20 400 cm /Im0 Do Q\nBT (Inside) Tj ET"
+	_, _, formGot, err := ImportFile("form-image.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(pageText), pageText),
+		fmt.Sprintf("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /XObject << /Im0 6 0 R >> >> /Length %d >>\nstream\n%s\nendstream", len(form), form),
+		imageObj,
+	}, ""))
+	if err != nil || !bytes.Contains(formGot, []byte("Page")) || !bytes.Contains(formGot, []byte("Inside")) || !bytes.Contains(formGot, []byte("data:image/jpeg;base64,")) {
+		t.Fatal(err, string(formGot))
+	}
+	var formed wordContent
+	if err := json.Unmarshal(formGot, &formed); err != nil {
+		t.Fatal(err)
+	}
+	types := make([]string, len(formed.Blocks))
+	for i, block := range formed.Blocks {
+		types[i] = block.Type
+	}
+	joined := strings.Join(types, ",")
+	if !strings.Contains(joined, "paragraph,image,paragraph") && !strings.Contains(joined, "heading") {
+		if strings.Index(joined, "image") < 0 {
+			t.Fatalf("form image missing %s", joined)
+		}
+	}
+}
+
+func TestPDFImagePredictor(t *testing.T) {
+	raw := []byte{0, 10, 20, 30, 0, 40, 50, 60}
+	obj := pdfObj{dict: map[string]pdfObj{
+		"Width":            {kind: objNum, num: 2},
+		"Height":           {kind: objNum, num: 1},
+		"ColorSpace":       {kind: objName, text: "DeviceRGB"},
+		"BitsPerComponent": {kind: objNum, num: 8},
+		"DecodeParms": {kind: objDict, dict: map[string]pdfObj{
+			"Predictor":        {kind: objNum, num: 15},
+			"Colors":           {kind: objNum, num: 3},
+			"Columns":          {kind: objNum, num: 2},
+			"BitsPerComponent": {kind: objNum, num: 8},
+		}},
+	}}
+	got := samplesToJPEG(obj, raw)
+	if len(got) < 3 || got[0] != 0xff || got[1] != 0xd8 {
+		t.Fatalf("predictor jpeg %d", len(got))
+	}
+	img, err := jpeg.Decode(bytes.NewReader(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Dx() != 2 || img.Bounds().Dy() != 1 {
+		t.Fatalf("size %v", img.Bounds())
+	}
+}
+
+func TestPDFRejectsBadImageBlock(t *testing.T) {
+	raw := []byte(`{"blocks":[{"id":"b1","type":"image","align":"left","runs":[{"text":""}],"image":"data:image/png;base64,aaaa"}]}`)
+	if _, err := Canonical(KindPDF, raw); err == nil {
+		t.Fatal("expected invalid image")
+	}
+	raw = []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"Hi"}],"image":"data:image/jpeg;base64,aaaa"}]}`)
+	if _, err := Canonical(KindWord, raw); err == nil {
+		t.Fatal("expected image field rejected")
+	}
+}
+
+func TestPDFKeepsRotatedImage(t *testing.T) {
+	jpegBytes := tinyJPEG(t)
+	content := "0 100 -100 0 200 200 cm /Im0 Do"
+	imageObj := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream", len(jpegBytes), jpegBytes)
+	page := "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>"
+	_, _, got, err := ImportFile("旋转.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		page,
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		imageObj,
+	}, ""))
+	if err != nil || !bytes.Contains(got, []byte(`"type":"image"`)) {
+		t.Fatal(err, string(got))
+	}
+}
+
+func TestCMYKJPEGExportsAsRGB(t *testing.T) {
+	raw, err := base64.StdEncoding.DecodeString(cmykJPEGFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.ColorModel != color.CMYKModel {
+		t.Fatal(err, cfg.ColorModel)
+	}
+	fitted := fitJPEG(raw)
+	fittedCfg, err := jpeg.DecodeConfig(bytes.NewReader(fitted))
+	if err != nil || fittedCfg.ColorModel == color.CMYKModel {
+		t.Fatal(err, fittedCfg.ColorModel)
+	}
+	block := wordBlock{
+		ID: "b1", Type: "image", Align: "left",
+		Runs:  []wordRun{{}},
+		Image: jpegDataPrefix + base64.StdEncoding.EncodeToString(raw),
+	}
+	content, err := json.Marshal(wordContent{Blocks: []wordBlock{block}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := Canonical(KindPDF, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := exportPDF(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(body, []byte("/DeviceCMYK")) || !bytes.Contains(body, []byte("/ColorSpace /DeviceRGB")) {
+		t.Fatal("exported color space")
+	}
+	at := bytes.Index(body, []byte{0xff, 0xd8})
+	if at < 0 {
+		t.Fatal("missing jpeg")
+	}
+	exported, err := jpeg.DecodeConfig(bytes.NewReader(body[at:]))
+	if err != nil || exported.ColorModel == color.CMYKModel {
+		t.Fatal(err, exported.ColorModel)
+	}
+}
+
+// 2×2 CMYK JPEG produced by Pillow. Go's encoder cannot write this color model.
+const cmykJPEGFixture = "/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/8AAFAgAAgACBEMRAE0RAFkRAEsRAP/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAA4EQwBNAFkASwAAPwD9U6/Kqvyqr9U6/9k="

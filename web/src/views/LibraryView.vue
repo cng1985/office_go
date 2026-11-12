@@ -42,7 +42,9 @@ const moving = ref(null)
 const moveTarget = ref('0')
 const view = ref('list')
 const fileInput = ref(null)
+const openIds = ref({})
 const viewKey = 'yunjian-library-view'
+const treeKey = 'yunjian-folder-tree'
 
 const folderId = computed(() => {
   const raw = route.query.folder
@@ -100,6 +102,75 @@ function openSpace(id) {
   router.push({ name: 'library', query: id ? { team: String(id) } : {} })
 }
 
+function readTree() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(treeKey) || '{}')
+    if (saved && typeof saved === 'object') openIds.value = saved
+  } catch {
+    openIds.value = {}
+  }
+}
+
+function saveTree() {
+  try {
+    localStorage.setItem(treeKey, JSON.stringify(openIds.value))
+  } catch {
+    /* 浏览器不允许写入时只保留这次展开状态 */
+  }
+}
+
+function toggleFolder(id) {
+  openIds.value = { ...openIds.value, [id]: !openIds.value[id] }
+  saveTree()
+}
+
+function expandFolder(id) {
+  if (!id || openIds.value[id]) return
+  openIds.value = { ...openIds.value, [id]: true }
+  saveTree()
+}
+
+function selectTree(id) {
+  expandFolder(id)
+  openFolder(id)
+}
+
+function expandAncestors() {
+  const next = { ...openIds.value }
+  let current = folderId.value
+  const seen = new Set()
+  if (current) next[current] = true
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    const folder = allFolders.value.find((item) => String(item.id) === String(current))
+    if (!folder?.parent_id || folder.parent_id === '0') break
+    next[String(folder.parent_id)] = true
+    current = String(folder.parent_id)
+  }
+  openIds.value = next
+  saveTree()
+}
+
+const treeRows = computed(() => {
+  const children = new Map()
+  for (const folder of allFolders.value) {
+    const parent = folder.parent_id && folder.parent_id !== '0' ? String(folder.parent_id) : '0'
+    if (!children.has(parent)) children.set(parent, [])
+    children.get(parent).push(folder)
+  }
+  for (const list of children.values()) list.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+  const rows = []
+  const walk = (parent, depth) => {
+    for (const folder of children.get(parent) || []) {
+      const kids = children.get(String(folder.id)) || []
+      rows.push({ folder, depth, hasChildren: kids.length > 0, open: !!openIds.value[String(folder.id)] })
+      if (openIds.value[String(folder.id)]) walk(String(folder.id), depth + 1)
+    }
+  }
+  walk('0', 0)
+  return rows
+})
+
 function openFolder(id) {
   title.value = ''
   const query = {}
@@ -133,8 +204,13 @@ async function load() {
       if (!query) throw err
       return { data: [], failed: err }
     })
-    const [folderPage, docPage] = await Promise.all([folderPromise, searchDocuments(docBody)])
+    const treePromise = searchFolders(withSpace({ page: 1, page_size: 200 })).catch(() => null)
+    const [folderPage, docPage, treePage] = await Promise.all([folderPromise, searchDocuments(docBody), treePromise])
     if (`${searching.value}|${folderId.value}|${teamId.value}|${kind.value}|${title.value}` !== stamp) return
+    if (treePage) {
+      allFolders.value = treePage.data
+      expandAncestors()
+    }
     if (folderPage.failed) error.value = folderPage.failed.message
     folders.value = kind.value && !query ? [] : folderPage.data
     documents.value = docPage.data
@@ -299,7 +375,6 @@ async function openMove(item) {
     allFolders.value = result.data
   } catch (err) {
     error.value = err.message
-    allFolders.value = []
   }
 }
 
@@ -337,12 +412,19 @@ function meta(item) {
 }
 
 let timer
+watch(teamId, () => {
+  allFolders.value = []
+  folders.value = []
+  documents.value = []
+  currentFolder.value = null
+})
 watch([kind, title, folderId, teamId], () => {
   clearTimeout(timer)
   timer = setTimeout(load, 250)
 })
 onMounted(() => {
   readView()
+  readTree()
   loadTeams()
   load()
 })
@@ -366,7 +448,8 @@ onMounted(() => {
       <button class="text-button" type="button" data-testid="logout" @click="signOut">退出</button>
     </header>
     <div class="library-frame">
-      <aside class="space-nav" data-testid="space-switch" aria-label="文档库">
+      <aside class="library-side">
+      <div class="space-nav" data-testid="space-switch" aria-label="文档库">
         <h2>个人</h2>
         <button type="button" data-testid="space-personal" :aria-current="teamId ? null : 'page'" @click="openSpace('')">我的文档</button>
         <h2>团队</h2>
@@ -379,6 +462,29 @@ onMounted(() => {
           @click="openSpace(team.id)"
         >{{ team.name }}</button>
         <router-link class="space-link" to="/account" data-testid="manage-teams">管理团队</router-link>
+      </div>
+      <div class="folder-tree" data-testid="folder-tree" aria-label="文件夹">
+        <button type="button" class="tree-row" data-testid="tree-root" :aria-current="folderId ? null : 'page'" @click="selectTree('')">
+          <span class="tree-chevron"></span>
+          <span class="tree-folder"></span>
+          <span class="tree-name">{{ spaceName }}</span>
+        </button>
+        <div
+          v-for="row in treeRows"
+          :key="row.folder.id"
+          class="tree-row"
+          :style="{ paddingLeft: `${row.depth * 16}px` }"
+          :aria-current="folderId === String(row.folder.id) ? 'page' : null"
+        >
+          <button type="button" class="tree-chevron" :data-testid="`tree-toggle-${row.folder.id}`" :aria-label="row.open ? '折叠' : '展开'" @click="toggleFolder(row.folder.id)">
+            <svg v-if="row.hasChildren" viewBox="0 0 16 16" :class="{ open: row.open }"><path d="M6 4l4 4-4 4" /></svg>
+          </button>
+          <button type="button" class="tree-label" :data-testid="`tree-folder-${row.folder.id}`" @click="selectTree(row.folder.id)">
+            <span class="tree-folder" :class="{ open: row.open }"></span>
+            <span class="tree-name">{{ row.folder.name }}</span>
+          </button>
+        </div>
+      </div>
       </aside>
       <main class="library">
       <h1>新建</h1>

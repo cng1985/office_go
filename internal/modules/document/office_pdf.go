@@ -40,10 +40,11 @@ type pdfAtom struct {
 }
 
 type pdfPen struct {
-	pages [][]byte
-	cur   bytes.Buffer
-	y     float64
-	dirty bool
+	pages  [][]byte
+	images [][]byte
+	cur    bytes.Buffer
+	y      float64
+	dirty  bool
 }
 
 func exportPDF(content []byte) ([]byte, error) {
@@ -69,11 +70,11 @@ func exportPDF(content []byte) ([]byte, error) {
 			return nil, apperrors.BadRequest(400, "有字符无法写入 PDF")
 		}
 	}
-	pages, err := layoutPDF(doc, sub, bullet)
+	pages, images, err := layoutPDF(doc, sub, bullet)
 	if err != nil {
 		return nil, err
 	}
-	body, err := writePDF(pages, sub)
+	body, err := writePDF(pages, sub, images)
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +113,17 @@ func neededPDFRunes(doc wordContent, bullet rune) []rune {
 	return out
 }
 
-func layoutPDF(doc wordContent, sub *pdfSubset, bullet rune) ([][]byte, error) {
+func layoutPDF(doc wordContent, sub *pdfSubset, bullet rune) ([][]byte, [][]byte, error) {
 	pen := &pdfPen{y: pdfPageH - pdfMargin}
 	number := 0
 	for _, block := range doc.Blocks {
 		if block.Type == "break" {
 			pen.finish()
+			number = 0
+			continue
+		}
+		if block.Type == "image" {
+			pen.drawImage(block)
 			number = 0
 			continue
 		}
@@ -132,13 +138,45 @@ func layoutPDF(doc wordContent, sub *pdfSubset, bullet rune) ([][]byte, error) {
 			}
 		}
 		if err := pen.drawBlock(block, sub, prefix); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if pen.dirty || len(pen.pages) == 0 {
 		pen.finish()
 	}
-	return pen.pages, nil
+	return pen.pages, pen.images, nil
+}
+
+func (pen *pdfPen) drawImage(block wordBlock) {
+	data, ok := jpegPayload(block.Image)
+	if !ok {
+		return
+	}
+	data = fitJPEG(data)
+	if len(data) == 0 {
+		return
+	}
+	width, height, _, ok := jpegInfo(data)
+	if !ok || width < 1 || height < 1 {
+		return
+	}
+	maxW := pdfPageW - pdfMargin*2
+	maxH := pdfPageH - pdfMargin*2
+	dw := maxW
+	dh := dw * float64(height) / float64(width)
+	if dh > maxH {
+		dh = maxH
+		dw = dh * float64(width) / float64(height)
+	}
+	if pen.dirty && pen.y-dh < pdfMargin {
+		pen.finish()
+	}
+	pen.images = append(pen.images, data)
+	x := pdfMargin
+	y := pen.y - dh
+	fmt.Fprintf(&pen.cur, "q %.2f 0 0 %.2f %.2f %.2f cm /Im%d Do Q\n", dw, dh, x, y, len(pen.images))
+	pen.y = y - 8
+	pen.dirty = true
 }
 
 func (pen *pdfPen) finish() {
@@ -389,7 +427,7 @@ func pdfRGB(hex string) (string, bool) {
 	return fmt.Sprintf("%.3f %.3f %.3f", float64(r)/255, float64(g)/255, float64(b)/255), true
 }
 
-func writePDF(pages [][]byte, sub *pdfSubset) ([]byte, error) {
+func writePDF(pages [][]byte, sub *pdfSubset, images [][]byte) ([]byte, error) {
 	fontBytes, err := compressPDF(sub.data)
 	if err != nil {
 		return nil, apperrors.WrapInternal(err)
@@ -403,8 +441,17 @@ func writePDF(pages [][]byte, sub *pdfSubset) ([]byte, error) {
 		n = 1
 		pages = [][]byte{nil}
 	}
-	total := 7 + n*2
+	total := 7 + n*2 + len(images)
 	objs := make([][]byte, total)
+	imageBase := 8 + n*2
+	var xobjects strings.Builder
+	if len(images) > 0 {
+		xobjects.WriteString(" /XObject <<")
+		for i := range images {
+			fmt.Fprintf(&xobjects, " /Im%d %d 0 R", i+1, imageBase+i)
+		}
+		xobjects.WriteString(" >>")
+	}
 	kids := make([]string, n)
 	for i := range pages {
 		contentID := 8 + i*2
@@ -415,7 +462,14 @@ func writePDF(pages [][]byte, sub *pdfSubset) ([]byte, error) {
 			return nil, apperrors.WrapInternal(err)
 		}
 		objs[contentID-1] = pdfStream("/Filter /FlateDecode", stream)
-		objs[pageID-1] = []byte(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.2f %.2f] /Contents %d 0 R /Resources << /Font << /F1 7 0 R >> >> >>\n", pdfPageW, pdfPageH, contentID))
+		objs[pageID-1] = []byte(fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.2f %.2f] /Contents %d 0 R /Resources << /Font << /F1 7 0 R >>%s >> >>\n", pdfPageW, pdfPageH, contentID, xobjects.String()))
+	}
+	for i, data := range images {
+		width, height, space, ok := jpegInfo(data)
+		if !ok {
+			width, height, space = 1, 1, "/DeviceRGB"
+		}
+		objs[imageBase-1+i] = pdfStream(fmt.Sprintf("/Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace %s /BitsPerComponent 8 /Filter /DCTDecode", width, height, space), data)
 	}
 	objs[0] = []byte("<< /Type /Catalog /Pages 2 0 R >>\n")
 	objs[1] = []byte(fmt.Sprintf("<< /Type /Pages /Count %d /Kids [%s] >>\n", n, strings.Join(kids, " ")))
@@ -566,15 +620,45 @@ func importPDF(filename string, body []byte) (string, string, []byte, error) {
 	if err != nil {
 		return "", "", nil, err
 	}
-	raw, err := json.Marshal(wordContent{Blocks: blocks})
-	if err != nil {
-		return "", "", nil, apperrors.WrapInternal(err)
+	canonical, err := canonicalPDFBlocks(blocks)
+	if err != nil && contentTooLarge(err) {
+		trimmed := append([]wordBlock(nil), blocks...)
+		for len(trimmed) > 0 && contentTooLarge(err) {
+			drop := -1
+			for i := len(trimmed) - 1; i >= 0; i-- {
+				if trimmed[i].Type == "image" {
+					drop = i
+					break
+				}
+			}
+			if drop < 0 {
+				break
+			}
+			copy(trimmed[drop:], trimmed[drop+1:])
+			trimmed = trimmed[:len(trimmed)-1]
+			if len(trimmed) == 0 {
+				break
+			}
+			canonical, err = canonicalPDFBlocks(trimmed)
+		}
 	}
-	canonical, err := Canonical(KindPDF, raw)
 	if err != nil {
 		return "", "", nil, err
 	}
 	return KindPDF, titleFromFilename(filename), canonical, nil
+}
+
+func canonicalPDFBlocks(blocks []wordBlock) ([]byte, error) {
+	raw, err := json.Marshal(wordContent{Blocks: blocks})
+	if err != nil {
+		return nil, apperrors.WrapInternal(err)
+	}
+	return Canonical(KindPDF, raw)
+}
+
+func contentTooLarge(err error) bool {
+	var appErr *apperrors.Error
+	return errors.As(err, &appErr) && appErr.Kind == apperrors.KindTooLarge
 }
 
 func pdfReadError(err error) error {
@@ -594,20 +678,15 @@ func pagesToBlocks(pages []pdfPageText) ([]wordBlock, error) {
 	var blocks []wordBlock
 	started := false
 	for _, page := range pages {
-		if len(page.lines) == 0 {
+		next := pageBlocks(page)
+		if len(next) == 0 {
 			continue
 		}
 		if started {
 			blocks = append(blocks, wordBlock{Type: "break", Align: "left", Runs: []wordRun{{}}})
 		}
 		started = true
-		for _, line := range page.lines {
-			block, ok := blockFromPDFLine(line, page.width)
-			if !ok {
-				continue
-			}
-			blocks = append(blocks, block)
-		}
+		blocks = append(blocks, next...)
 	}
 	if len(blocks) == 0 {
 		return nil, apperrors.BadRequest(400, "这份 PDF 没有可编辑的文字")
@@ -619,6 +698,35 @@ func pagesToBlocks(pages []pdfPageText) ([]wordBlock, error) {
 		blocks[i].ID = idAt("b", i+1)
 	}
 	return blocks, nil
+}
+
+type pdfPiece struct {
+	y     float64
+	block wordBlock
+}
+
+func pageBlocks(page pdfPageText) []wordBlock {
+	pieces := make([]pdfPiece, 0, len(page.lines)+len(page.images))
+	for _, line := range page.lines {
+		block, ok := blockFromPDFLine(line, page.width)
+		if !ok {
+			continue
+		}
+		pieces = append(pieces, pdfPiece{y: line.y, block: block})
+	}
+	for _, image := range page.images {
+		block, ok := blockFromPDFImage(image)
+		if !ok {
+			continue
+		}
+		pieces = append(pieces, pdfPiece{y: image.y, block: block})
+	}
+	sort.SliceStable(pieces, func(i, j int) bool { return pieces[i].y > pieces[j].y })
+	out := make([]wordBlock, len(pieces))
+	for i, piece := range pieces {
+		out[i] = piece.block
+	}
+	return out
 }
 
 func blockFromPDFLine(line pdfTextLine, width float64) (wordBlock, bool) {
