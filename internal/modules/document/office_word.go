@@ -258,9 +258,17 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 	var text strings.Builder
 	inRunProps := 0
 	readingText := false
+	fallback := 0
 	err := walkXML(data, func(token xml.Token) error {
 		switch node := token.(type) {
 		case xml.StartElement:
+			if node.Name.Local == "Fallback" {
+				fallback++
+				return nil
+			}
+			if fallback > 0 {
+				return nil
+			}
 			switch node.Name.Local {
 			case "p":
 				current = &wordDraft{kind: "paragraph", align: "left"}
@@ -337,6 +345,13 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 				readingText = true
 			}
 		case xml.EndElement:
+			if node.Name.Local == "Fallback" && fallback > 0 {
+				fallback--
+				return nil
+			}
+			if fallback > 0 {
+				return nil
+			}
 			switch node.Name.Local {
 			case "rPr":
 				if inRunProps > 0 {
@@ -358,6 +373,9 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 				current = nil
 			}
 		case xml.CharData:
+			if fallback > 0 {
+				return nil
+			}
 			if readingText && run != nil {
 				text.Write(node)
 			}
@@ -374,7 +392,7 @@ func parseWordDocument(data []byte) ([]wordBlock, error) {
 			Runs: []wordRun{{}},
 		}}
 	}
-	if len(blocks) > 400 {
+	if len(blocks) > maxWordBlocks {
 		return nil, apperrors.BadRequest(400, "文稿段落过多，无法导入")
 	}
 	return blocks, nil

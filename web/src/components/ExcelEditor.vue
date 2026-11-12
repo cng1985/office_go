@@ -41,6 +41,7 @@ const props = defineProps({
   status: { type: String, default: '' },
   pending: { type: Boolean, default: false },
   previewing: { type: Boolean, default: false },
+  homeTo: { type: [String, Object], default: '/' },
 })
 const emit = defineEmits(['update:modelValue', 'update:title', 'save', 'versions'])
 const session = useSessionStore()
@@ -1288,7 +1289,7 @@ onBeforeUnmount(() => {
 <template>
   <div ref="rootRef" class="excel-editor" :class="{ painting: painter }" data-testid="excel-editor" tabindex="0" @paste="onPaste">
     <div class="sheets-top">
-      <router-link class="sheets-mark" to="/" aria-label="返回文库">
+      <router-link class="sheets-mark" :to="homeTo" aria-label="返回文库">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="1.5" /><path d="M4 9h16M4 15h16M10 3v18M16 3v18" /></svg>
       </router-link>
       <input class="sheets-title" data-testid="doc-title" :value="title" :disabled="previewing" @input="emit('update:title', $event.target.value)" />

@@ -12,6 +12,14 @@ func validKind(kind string) bool {
 	return kind == KindWord || kind == KindExcel || kind == KindPPT
 }
 
+func normalizeFolderName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 80 || hasControl(name, false) || strings.ContainsAny(name, `/\`) {
+		return "", apperrors.BadRequest(400, "文件夹名称需要 1 到 80 个字符")
+	}
+	return name, nil
+}
+
 func normalizeTitle(title string) (string, error) {
 	title = strings.TrimSpace(title)
 	if title == "" || utf8.RuneCountInString(title) > 200 || hasControl(title, false) {

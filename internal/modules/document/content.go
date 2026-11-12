@@ -16,6 +16,7 @@ import (
 
 const (
 	maxContentBytes = 1 << 20
+	maxWordBlocks   = 4000
 	maxExcelRows    = 1000
 	maxExcelCols    = 100
 )
@@ -206,7 +207,7 @@ func marshalContent(value any) ([]byte, error) {
 }
 
 func validateWord(content *wordContent) error {
-	if len(content.Blocks) < 1 || len(content.Blocks) > 400 {
+	if len(content.Blocks) < 1 || len(content.Blocks) > maxWordBlocks {
 		return apperrors.BadRequest(400, "文稿段落数量无效")
 	}
 	seen := map[string]struct{}{}

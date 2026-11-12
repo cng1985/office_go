@@ -437,6 +437,52 @@ func excelGridFile(t *testing.T, rows, cols int) []byte {
 	return raw
 }
 
+func TestLongWordDocumentImports(t *testing.T) {
+	file := wordParagraphs(t, 401)
+	kind, _, content, err := ImportFile("长文.docx", file)
+	if err != nil || kind != KindWord || !bytes.Contains(content, []byte("段401")) {
+		t.Fatalf("import 401 = %s %v", content, err)
+	}
+	if _, _, _, err = ImportFile("过长.docx", wordParagraphs(t, maxWordBlocks+1)); err == nil || !strings.Contains(err.Error(), "文稿段落过多") {
+		t.Fatal(err)
+	}
+}
+
+func TestWordFallbackIsNotImported(t *testing.T) {
+	document := officeXMLHeader + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body>` +
+		`<w:p><w:r><w:t>可见</w:t></w:r></w:p>` +
+		`<mc:AlternateContent><mc:Choice Requires="wps"><w:p><w:r><w:t>现代</w:t></w:r></w:p></mc:Choice>` +
+		`<mc:Fallback><w:p><w:r><w:t>旧版</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent>` +
+		`</w:body></w:document>`
+	body, err := packZip(map[string]string{"word/document.xml": document})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, content, err := ImportFile("兼容.docx", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(content, []byte("可见")) || !bytes.Contains(content, []byte("现代")) || bytes.Contains(content, []byte("旧版")) {
+		t.Fatalf("fallback leaked: %s", content)
+	}
+}
+
+func wordParagraphs(t *testing.T, count int) []byte {
+	t.Helper()
+	var body strings.Builder
+	body.WriteString(officeXMLHeader)
+	body.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>`)
+	for i := 1; i <= count; i++ {
+		fmt.Fprintf(&body, `<w:p><w:r><w:t>段%d</w:t></w:r></w:p>`, i)
+	}
+	body.WriteString(`</w:body></w:document>`)
+	raw, err := packZip(map[string]string{"word/document.xml": body.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func extOf(kind string) string {
 	switch kind {
 	case KindWord:

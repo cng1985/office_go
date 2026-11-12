@@ -5,6 +5,7 @@ import "encoding/json"
 func documentToSimple(row *detailRow) *DocumentSimple {
 	return &DocumentSimple{
 		ID:        row.ID,
+		FolderID:  valueOrZero(row.FolderID),
 		Kind:      row.Kind,
 		Title:     row.Title,
 		Revision:  row.Revision,
@@ -16,6 +17,7 @@ func documentToSimple(row *detailRow) *DocumentSimple {
 func documentToResponse(row *detailRow) *DocumentResponse {
 	return &DocumentResponse{
 		ID:        row.ID,
+		FolderID:  valueOrZero(row.FolderID),
 		Kind:      row.Kind,
 		Title:     row.Title,
 		Revision:  row.Revision,
@@ -25,6 +27,13 @@ func documentToResponse(row *detailRow) *DocumentResponse {
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 	}
+}
+
+func valueOrZero(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func versionToSimple(entity *DocumentVersion) *DocumentVersionSimple {

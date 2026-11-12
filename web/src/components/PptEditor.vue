@@ -21,6 +21,7 @@ const props = defineProps({
   status: { type: String, default: '' },
   pending: { type: Boolean, default: false },
   previewing: { type: Boolean, default: false },
+  homeTo: { type: [String, Object], default: '/' },
 })
 const emit = defineEmits(['update:modelValue', 'update:title', 'save', 'versions'])
 const session = useSessionStore()
@@ -579,7 +580,7 @@ onBeforeUnmount(() => {
   <div class="ppt-editor" data-testid="ppt-editor" tabindex="0" @keydown="onKey" @pointerdown="clearSelection">
     <header class="slides-top slides-chrome">
       <div class="slides-brand">
-        <router-link class="slides-logo" to="/" aria-label="返回文库">
+        <router-link class="slides-logo" :to="homeTo" aria-label="返回文库">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.5" fill="none" stroke="#fff" stroke-width="1.8"/><path d="M8 20h8M12 17v3" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>
         </router-link>
         <div class="slides-titlebox">
