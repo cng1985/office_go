@@ -486,11 +486,13 @@ func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, erro
 					ref = attr(node, "id")
 				}
 				if data := images[ref]; data != "" {
-					at := len(current.runs)
-					if text.Len() > 0 {
-						at++
+					if run != nil && text.Len() > 0 {
+						flushed := *run
+						flushed.Text = text.String()
+						current.runs = append(current.runs, flushed)
+						text.Reset()
 					}
-					current.images = append(current.images, wordImageAt{at: at, data: data})
+					current.images = append(current.images, wordImageAt{at: len(current.runs), data: data})
 				}
 			case "pStyle":
 				if current != nil {

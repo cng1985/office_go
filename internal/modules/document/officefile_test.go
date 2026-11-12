@@ -577,6 +577,66 @@ func plainWord(block wordBlock) string {
 	return b.String()
 }
 
+func TestWordImageKeepsTextOrderAndTransparency(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 16, 16))
+	for y := 6; y < 10; y++ {
+		for x := 6; x < 10; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{R: 12, G: 18, B: 24, A: 255})
+		}
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	document := officeXMLHeader + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:t>before</w:t><w:drawing><a:blip r:embed="rId1"/></w:drawing><w:t>after</w:t></w:r></w:p></w:body></w:document>`
+	rels := officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/mark.png"/></Relationships>`
+	body, err := packZip(map[string]string{
+		"word/document.xml":            document,
+		"word/_rels/document.xml.rels": rels,
+		"word/media/mark.png":          pngBuf.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, content, err := ImportFile("透明.docx", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc wordContent
+	if err := json.Unmarshal(content, &doc); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(doc.Blocks))
+	var imageData string
+	for _, block := range doc.Blocks {
+		if block.Type == "image" {
+			got = append(got, "image")
+			imageData = block.Image
+			continue
+		}
+		got = append(got, plainWord(block))
+	}
+	if strings.Join(got, "|") != "before|image|after" {
+		t.Fatalf("order = %s", strings.Join(got, "|"))
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(imageData, jpegDataPrefix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	corner := color.RGBAModel.Convert(decoded.At(0, 0)).(color.RGBA)
+	ink := color.RGBAModel.Convert(decoded.At(8, 8)).(color.RGBA)
+	if corner.R < 240 || corner.G < 240 || corner.B < 240 {
+		t.Fatalf("transparent pixel = %#v", corner)
+	}
+	if ink.R > 80 || ink.G > 80 || ink.B > 80 {
+		t.Fatalf("ink pixel = %#v", ink)
+	}
+}
+
 func TestWordFallbackIsNotImported(t *testing.T) {
 	document := officeXMLHeader + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body>` +
 		`<w:p><w:r><w:t>可见</w:t></w:r></w:p>` +
