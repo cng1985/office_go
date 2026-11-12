@@ -25,7 +25,7 @@ const route = useRoute()
 const router = useRouter()
 const documents = ref([])
 const folders = ref([])
-const allFolders = ref([])
+const foldersBySpace = ref({})
 const teams = ref([])
 const currentFolder = ref(null)
 const kind = ref('')
@@ -58,6 +58,16 @@ const teamId = computed(() => {
 })
 const currentTeam = computed(() => teams.value.find((item) => String(item.id) === teamId.value))
 const spaceName = computed(() => currentTeam.value?.name || (teamId.value ? '团队文档' : '我的文档'))
+const allFolders = computed(() => foldersBySpace.value[teamId.value] || [])
+const treeRoots = computed(() => [
+  { id: '', key: 'personal', name: '我的文档', testId: 'space-personal' },
+  ...teams.value.map((team) => ({
+    id: String(team.id),
+    key: `team-${team.id}`,
+    name: team.name,
+    testId: `space-team-${team.id}`,
+  })),
+])
 const searching = computed(() => title.value.trim() !== '')
 const ancestors = computed(() => currentFolder.value?.ancestors || [])
 const initial = computed(() => (session.account?.display_name || session.account?.username || '云').slice(0, 1))
@@ -96,9 +106,22 @@ function withSpace(body) {
   return body
 }
 
+function spaceStorageKey(id) {
+  return id ? `space:${id}` : 'space:personal'
+}
+
+function rememberFolders(space, rows) {
+  foldersBySpace.value = { ...foldersBySpace.value, [space || '']: rows || [] }
+}
+
 function openSpace(id) {
   title.value = ''
   kind.value = ''
+  const key = spaceStorageKey(id)
+  if (!openIds.value[key]) {
+    openIds.value = { ...openIds.value, [key]: true }
+    saveTree()
+  }
   router.push({ name: 'library', query: id ? { team: String(id) } : {} })
 }
 
@@ -130,9 +153,39 @@ function expandFolder(id) {
   saveTree()
 }
 
-function selectTree(id) {
+function selectTree(space, id) {
+  const key = spaceStorageKey(space)
+  if (!openIds.value[key]) openIds.value = { ...openIds.value, [key]: true }
   expandFolder(id)
-  openFolder(id)
+  title.value = ''
+  const query = {}
+  if (space) query.team = String(space)
+  if (id) query.folder = String(id)
+  router.push({ name: 'library', query })
+}
+
+function toggleSpace(id) {
+  const key = spaceStorageKey(id)
+  const opening = !openIds.value[key]
+  openIds.value = { ...openIds.value, [key]: opening }
+  saveTree()
+  if (opening) loadSpaceFolders(id)
+}
+
+const spaceTokens = {}
+async function loadSpaceFolders(space) {
+  const key = space || ''
+  const token = (spaceTokens[key] || 0) + 1
+  spaceTokens[key] = token
+  try {
+    const body = { page: 1, page_size: 200 }
+    if (space) body.team_id = space
+    const page = await searchFolders(body)
+    if (spaceTokens[key] !== token) return
+    rememberFolders(key, page.data)
+  } catch {
+    /* 展开失败时保留已经看到的目录 */
+  }
 }
 
 function expandAncestors() {
@@ -151,9 +204,9 @@ function expandAncestors() {
   saveTree()
 }
 
-const treeRows = computed(() => {
+function rowsFor(space) {
   const children = new Map()
-  for (const folder of allFolders.value) {
+  for (const folder of foldersBySpace.value[space || ''] || []) {
     const parent = folder.parent_id && folder.parent_id !== '0' ? String(folder.parent_id) : '0'
     if (!children.has(parent)) children.set(parent, [])
     children.get(parent).push(folder)
@@ -169,7 +222,7 @@ const treeRows = computed(() => {
   }
   walk('0', 0)
   return rows
-})
+}
 
 function openFolder(id) {
   title.value = ''
@@ -179,12 +232,26 @@ function openFolder(id) {
   router.push({ name: 'library', query })
 }
 
+function restoredSpaces() {
+  const spaces = []
+  if (openIds.value['space:personal']) spaces.push('')
+  for (const team of teams.value) {
+    const id = String(team.id)
+    if (openIds.value[spaceStorageKey(id)]) spaces.push(id)
+  }
+  return spaces
+}
+
 async function loadTeams() {
   try {
     const result = await searchTeams({ page: 1, page_size: 200 })
     teams.value = result.data
   } catch {
     teams.value = []
+  }
+  for (const space of restoredSpaces()) {
+    if (space === teamId.value) continue
+    loadSpaceFolders(space)
   }
 }
 
@@ -208,7 +275,11 @@ async function load() {
     const [folderPage, docPage, treePage] = await Promise.all([folderPromise, searchDocuments(docBody), treePromise])
     if (`${searching.value}|${folderId.value}|${teamId.value}|${kind.value}|${title.value}` !== stamp) return
     if (treePage) {
-      allFolders.value = treePage.data
+      rememberFolders(space, treePage.data)
+      if (folderId.value) {
+        openIds.value = { ...openIds.value, [spaceStorageKey(space)]: true }
+        saveTree()
+      }
       expandAncestors()
     }
     if (folderPage.failed) error.value = folderPage.failed.message
@@ -372,7 +443,7 @@ async function openMove(item) {
   error.value = ''
   try {
     const result = await searchFolders(withSpace({ page: 1, page_size: 200 }))
-    allFolders.value = result.data
+    rememberFolders(teamId.value, result.data)
   } catch (err) {
     error.value = err.message
   }
@@ -412,11 +483,15 @@ function meta(item) {
 }
 
 let timer
-watch(teamId, () => {
-  allFolders.value = []
+watch(teamId, (id) => {
   folders.value = []
   documents.value = []
   currentFolder.value = null
+  const key = spaceStorageKey(id)
+  if (!openIds.value[key]) {
+    openIds.value = { ...openIds.value, [key]: true }
+    saveTree()
+  }
 })
 watch([kind, title, folderId, teamId], () => {
   clearTimeout(timer)
@@ -425,6 +500,11 @@ watch([kind, title, folderId, teamId], () => {
 onMounted(() => {
   readView()
   readTree()
+  const key = spaceStorageKey(teamId.value)
+  if (!openIds.value[key]) {
+    openIds.value = { ...openIds.value, [key]: true }
+    saveTree()
+  }
   loadTeams()
   load()
 })
@@ -449,42 +529,37 @@ onMounted(() => {
     </header>
     <div class="library-frame">
       <aside class="library-side">
-      <div class="space-nav" data-testid="space-switch" aria-label="文档库">
-        <h2>个人</h2>
-        <button type="button" data-testid="space-personal" :aria-current="teamId ? null : 'page'" @click="openSpace('')">我的文档</button>
-        <h2>团队</h2>
-        <button
-          v-for="team in teams"
-          :key="team.id"
-          type="button"
-          :data-testid="`space-team-${team.id}`"
-          :aria-current="teamId === String(team.id) ? 'page' : null"
-          @click="openSpace(team.id)"
-        >{{ team.name }}</button>
-        <router-link class="space-link" to="/account" data-testid="manage-teams">管理团队</router-link>
-      </div>
       <div class="folder-tree" data-testid="folder-tree" aria-label="文件夹">
-        <button type="button" class="tree-row" data-testid="tree-root" :aria-current="folderId ? null : 'page'" @click="selectTree('')">
-          <span class="tree-chevron"></span>
-          <span class="tree-folder"></span>
-          <span class="tree-name">{{ spaceName }}</span>
-        </button>
-        <div
-          v-for="row in treeRows"
-          :key="row.folder.id"
-          class="tree-row"
-          :style="{ paddingLeft: `${row.depth * 16}px` }"
-          :aria-current="folderId === String(row.folder.id) ? 'page' : null"
-        >
-          <button type="button" class="tree-chevron" :data-testid="`tree-toggle-${row.folder.id}`" :aria-label="row.open ? '折叠' : '展开'" @click="toggleFolder(row.folder.id)">
-            <svg v-if="row.hasChildren" viewBox="0 0 16 16" :class="{ open: row.open }"><path d="M6 4l4 4-4 4" /></svg>
-          </button>
-          <button type="button" class="tree-label" :data-testid="`tree-folder-${row.folder.id}`" @click="selectTree(row.folder.id)">
-            <span class="tree-folder" :class="{ open: row.open }"></span>
-            <span class="tree-name">{{ row.folder.name }}</span>
-          </button>
+        <div v-for="root in treeRoots" :key="root.key" class="tree-branch">
+          <div class="tree-row" :data-testid="root.id ? null : 'tree-root'" :aria-current="teamId === root.id && !folderId ? 'page' : null">
+            <button type="button" class="tree-chevron" :data-testid="`tree-toggle-${root.key}`" :aria-label="openIds[spaceStorageKey(root.id)] ? '折叠' : '展开'" @click="toggleSpace(root.id)">
+              <svg viewBox="0 0 16 16" :class="{ open: openIds[spaceStorageKey(root.id)] }"><path d="M6 4l4 4-4 4" /></svg>
+            </button>
+            <button type="button" class="tree-label" :data-testid="root.testId" @click="openSpace(root.id)">
+              <span class="tree-folder" :class="{ open: openIds[spaceStorageKey(root.id)] }"></span>
+              <span class="tree-name">{{ root.name }}</span>
+            </button>
+          </div>
+          <template v-if="openIds[spaceStorageKey(root.id)]">
+            <div
+              v-for="row in rowsFor(root.id)"
+              :key="`${root.key}-${row.folder.id}`"
+              class="tree-row"
+              :style="{ paddingLeft: `${(row.depth + 1) * 16}px` }"
+              :aria-current="teamId === root.id && folderId === String(row.folder.id) ? 'page' : null"
+            >
+              <button type="button" class="tree-chevron" :data-testid="`tree-toggle-${row.folder.id}`" :aria-label="row.open ? '折叠' : '展开'" @click="toggleFolder(row.folder.id)">
+                <svg v-if="row.hasChildren" viewBox="0 0 16 16" :class="{ open: row.open }"><path d="M6 4l4 4-4 4" /></svg>
+              </button>
+              <button type="button" class="tree-label" :data-testid="`tree-folder-${row.folder.id}`" @click="selectTree(root.id, row.folder.id)">
+                <span class="tree-folder" :class="{ open: row.open }"></span>
+                <span class="tree-name">{{ row.folder.name }}</span>
+              </button>
+            </div>
+          </template>
         </div>
       </div>
+      <router-link class="tree-manage" to="/teams" data-testid="manage-teams">团队管理</router-link>
       </aside>
       <main class="library">
       <h1>新建</h1>
@@ -657,7 +732,7 @@ onMounted(() => {
       <div class="modal">
         <h3>移动「{{ moving.title }}」</h3>
         <div class="move-list" data-testid="move-list">
-          <button type="button" data-testid="move-target" :aria-pressed="moveTarget === '0'" @click="moveTarget = '0'">我的文档</button>
+          <button type="button" data-testid="move-target" :aria-pressed="moveTarget === '0'" @click="moveTarget = '0'">{{ spaceName }}</button>
           <button v-for="item in moveChoices" :key="item.id" type="button" data-testid="move-target" :aria-pressed="moveTarget === String(item.id)" @click="moveTarget = String(item.id)">
             {{ folderPath(item) }}
           </button>
