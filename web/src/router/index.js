@@ -4,6 +4,8 @@ import LibraryView from '../views/LibraryView.vue'
 import EditorView from '../views/EditorView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
+import AccountView from '../views/AccountView.vue'
+import TeamView from '../views/TeamView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -11,6 +13,8 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     { path: '/register', name: 'register', component: RegisterView, meta: { public: true } },
     { path: '/', name: 'library', component: LibraryView },
+    { path: '/account', name: 'account', component: AccountView },
+    { path: '/team/:id', name: 'team', component: TeamView },
     { path: '/doc/:id', name: 'editor', component: EditorView },
   ],
 })

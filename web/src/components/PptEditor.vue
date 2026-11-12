@@ -699,7 +699,7 @@ onBeforeUnmount(() => {
             <button type="button" @click="run(() => emit('versions'))">版本历史</button>
           </div>
         </div>
-        <span class="slides-avatar" :title="session.account?.display_name || ''">{{ initial }}</span>
+        <router-link class="slides-avatar" to="/account" data-testid="account-link" :title="session.account?.display_name || '个人中心'">{{ initial }}</router-link>
       </div>
     </header>
     <div class="slides-ribbon slides-chrome" v-if="!readonly && ribbonOpen">

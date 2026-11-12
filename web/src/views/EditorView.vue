@@ -30,7 +30,14 @@ const preview = ref(null)
 
 const dirty = computed(() => doc.value && JSON.stringify({ title: doc.value.title, content: draft.value }) !== saved.value)
 const pageLike = computed(() => doc.value?.kind === 'word' || doc.value?.kind === 'pdf')
-const libraryHome = computed(() => (doc.value?.folder_id ? { path: '/', query: { folder: String(doc.value.folder_id) } } : '/'))
+const libraryHome = computed(() => {
+  const query = {}
+  const team = doc.value?.team_id
+  const folder = doc.value?.folder_id
+  if (team && team !== '0') query.team = String(team)
+  if (folder && folder !== '0') query.folder = String(folder)
+  return Object.keys(query).length ? { path: '/', query } : '/'
+})
 const excelPreview = computed(() => (preview.value && doc.value?.kind === 'excel' ? normalizeWorkbook(preview.value.content) : null))
 
 function asDraft(kind, content) {

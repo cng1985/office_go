@@ -49,6 +49,30 @@ func validatePassword(password string) error {
 	return nil
 }
 
+func normalizeDisplayName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 64 || hasControl(name) {
+		return "", apperrors.BadRequest(400, "显示名称需要 1 到 64 个字符")
+	}
+	return name, nil
+}
+
+func normalizeTeamName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 40 || hasControl(name) {
+		return "", apperrors.BadRequest(400, "团队名称需要 1 到 40 个字符")
+	}
+	return name, nil
+}
+
+func normalizeUsername(name string) (string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !usernamePattern.MatchString(name) {
+		return "", apperrors.BadRequest(400, "用户不存在")
+	}
+	return name, nil
+}
+
 func hasControl(value string) bool {
 	for _, r := range value {
 		if r < 32 || r == 127 {

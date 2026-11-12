@@ -29,6 +29,16 @@ func (c *Controller) RegisterPublic(group *gin.RouterGroup) {
 func (c *Controller) RegisterProtected(group *gin.RouterGroup) {
 	group.POST("/account/logout", c.logout)
 	group.POST("/account/me", c.me)
+	group.POST("/account/profile", c.profile)
+	group.POST("/account/password", c.password)
+	group.POST("/team/create", c.teamCreate)
+	group.POST("/team/update", c.teamUpdate)
+	group.POST("/team/delete", c.teamDelete)
+	group.POST("/team/search", c.teamSearch)
+	group.POST("/team/one", c.teamOne)
+	group.POST("/team/member/add", c.teamMemberAdd)
+	group.POST("/team/member/remove", c.teamMemberRemove)
+	group.POST("/team/leave", c.teamLeave)
 }
 
 func (c *Controller) register(ctx *gin.Context) {

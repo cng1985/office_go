@@ -2,10 +2,11 @@ package document
 
 import "time"
 
-// Folder 是用户自己的文档目录，可以嵌套。
+// Folder 是个人或团队文档目录，可以嵌套。TeamID 为空时属于 OwnerID 的个人库。
 type Folder struct {
 	ID        int64  `gorm:"primaryKey;autoIncrement"`
 	OwnerID   int64  `gorm:"not null;index:idx_office_folder_owner_parent,priority:1"`
+	TeamID    *int64 `gorm:"index:idx_office_folder_team"`
 	ParentID  *int64 `gorm:"index:idx_office_folder_owner_parent,priority:2"`
 	Name      string `gorm:"size:80;not null"`
 	CreatedAt time.Time
@@ -15,9 +16,11 @@ type Folder struct {
 func (Folder) TableName() string { return "office_folder" }
 
 // Document 是云端文档主表。删除策略为硬删除，并同时删除全部版本。
+// TeamID 为空时只有 OwnerID 可以访问；有值时团队成员都可以访问，OwnerID 仍是创建者。
 type Document struct {
 	ID               int64  `gorm:"primaryKey;autoIncrement"`
 	OwnerID          int64  `gorm:"not null;index:idx_office_document_owner_updated,priority:1"`
+	TeamID           *int64 `gorm:"index:idx_office_document_team"`
 	FolderID         *int64 `gorm:"index:idx_office_document_owner_folder,priority:2"`
 	Kind             string `gorm:"size:16;not null"`
 	Title            string `gorm:"size:200;not null"`

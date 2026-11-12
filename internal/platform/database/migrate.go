@@ -13,7 +13,7 @@ import (
 )
 
 // migrationVersions 按顺序执行。已记录的版本会跳过，方便已有数据库补上后续变更。
-var migrationVersions = []string{"0001_init", "0002_folder"}
+var migrationVersions = []string{"0001_init", "0002_folder", "0003_team"}
 
 type migrationStep struct {
 	version string

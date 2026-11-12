@@ -18,6 +18,7 @@ func documentToResponse(row *detailRow) *DocumentResponse {
 	return &DocumentResponse{
 		ID:        row.ID,
 		FolderID:  valueOrZero(row.FolderID),
+		TeamID:    valueOrZero(row.TeamID),
 		Kind:      row.Kind,
 		Title:     row.Title,
 		Revision:  row.Revision,
