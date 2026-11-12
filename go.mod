@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	go.uber.org/fx v1.23.0
 	golang.org/x/crypto v0.31.0
+	golang.org/x/image v0.18.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.5.7
 	gorm.io/driver/postgres v1.5.11

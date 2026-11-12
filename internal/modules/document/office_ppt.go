@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"math"
+	"net/url"
 	"path"
 	"regexp"
 	"sort"
@@ -302,22 +303,15 @@ func importPptx(filename string, body []byte) (string, string, []byte, error) {
 	if len(parts) > 30 {
 		return "", "", nil, apperrors.BadRequest(400, "幻灯片过多，无法导入")
 	}
+	pageW, pageH := presentationSize(files)
 	slides := make([]pptSlide, 0, len(parts))
 	for i, part := range parts {
-		relsPath := path.Join(path.Dir(part.name), "_rels", path.Base(part.name)+".rels")
-		background, elements, notes, err := parseSlide(part.data, imagePartsIn(files, files[relsPath], path.Dir(part.name)))
+		slide, err := importSlide(files, part, pageW, pageH)
 		if err != nil {
-			return "", "", nil, readFailure(err)
+			return "", "", nil, err
 		}
-		if len(elements) > 40 {
-			return "", "", nil, apperrors.BadRequest(400, "幻灯片元素过多，无法导入")
-		}
-		slides = append(slides, pptSlide{
-			ID:         idAt("s", i+1),
-			Background: background,
-			Elements:   elements,
-			Notes:      notes,
-		})
+		slide.ID = idAt("s", i+1)
+		slides = append(slides, slide)
 	}
 	raw, err := json.Marshal(pptContent{Slides: slides})
 	if err != nil {
@@ -328,6 +322,181 @@ func importPptx(filename string, body []byte) (string, string, []byte, error) {
 		return "", "", nil, err
 	}
 	return KindPPT, titleFromFilename(filename), canonical, nil
+}
+
+func importSlide(files map[string][]byte, part slideSource, pageW, pageH float64) (pptSlide, error) {
+	var zero pptSlide
+	layoutName := relatedPart(files, part.name, "/slideLayout")
+	masterName := ""
+	if layoutName != "" {
+		masterName = relatedPart(files, layoutName, "/slideMaster")
+	}
+	var masterParsed, layoutParsed slideParsed
+	if masterName != "" {
+		parsed, err := parseSlidePart(files, masterName, nil, false)
+		if err != nil {
+			return zero, err
+		}
+		masterParsed = parsed
+	}
+	placeholders := mergePlaceholders(masterParsed.placeholders, nil)
+	if layoutName != "" {
+		parsed, err := parseSlidePart(files, layoutName, nil, false)
+		if err != nil {
+			return zero, err
+		}
+		layoutParsed = parsed
+		placeholders = mergePlaceholders(placeholders, layoutParsed.placeholders)
+	}
+	// 版式和母版上的图片、背景会一起出现；占位符没有坐标时，用版式里的位置。
+	parsed, err := parseSlidePart(files, part.name, placeholders, true)
+	if err != nil {
+		return zero, err
+	}
+	background := parsed.background
+	bgImage := parsed.bgImage
+	switch {
+	case parsed.ownBackground:
+	case layoutParsed.ownBackground:
+		background = layoutParsed.background
+		bgImage = layoutParsed.bgImage
+	case masterParsed.ownBackground:
+		background = masterParsed.background
+		bgImage = masterParsed.bgImage
+	}
+	inherited := append(imageElements(masterParsed.elements), imageElements(layoutParsed.elements)...)
+	elements, err := assembleSlide(bgImage, pageW, pageH, inherited, parsed.elements)
+	if err != nil {
+		return zero, err
+	}
+	return pptSlide{
+		Background: background,
+		Elements:   elements,
+		Notes:      parsed.notes,
+	}, nil
+}
+
+func parseSlidePart(files map[string][]byte, name string, placeholders map[string]phBox, keepPlaceholders bool) (slideParsed, error) {
+	relsPath := path.Join(path.Dir(name), "_rels", path.Base(name)+".rels")
+	parsed, err := parseSlide(files[name], imagePartsIn(files, files[relsPath], path.Dir(name)), placeholders, keepPlaceholders)
+	if err != nil {
+		return slideParsed{}, readFailure(err)
+	}
+	return parsed, nil
+}
+
+func relatedPart(files map[string][]byte, partName, typeSuffix string) string {
+	relsPath := path.Join(path.Dir(partName), "_rels", path.Base(partName)+".rels")
+	var found string
+	_ = walkXML(files[relsPath], func(token xml.Token) error {
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "Relationship" || found != "" {
+			return nil
+		}
+		if !strings.HasSuffix(attr(start, "Type"), typeSuffix) {
+			return nil
+		}
+		found = resolvePart(path.Dir(partName), attr(start, "Target"))
+		return nil
+	})
+	if found == "" || files[found] == nil {
+		return ""
+	}
+	return found
+}
+
+func resolvePart(base, target string) string {
+	target = strings.TrimSpace(strings.ReplaceAll(target, "\\", "/"))
+	if cut := strings.IndexAny(target, "?#"); cut >= 0 {
+		target = target[:cut]
+	}
+	if decoded, err := url.PathUnescape(target); err == nil {
+		target = decoded
+	}
+	var name string
+	if strings.HasPrefix(target, "/") {
+		name = strings.TrimPrefix(path.Clean(target), "/")
+	} else {
+		name = path.Clean(path.Join(base, target))
+	}
+	if name == "." || strings.Contains(name, "..") {
+		return ""
+	}
+	return name
+}
+
+func presentationSize(files map[string][]byte) (float64, float64) {
+	width, height := 960.0, 540.0
+	_ = walkXML(files["ppt/presentation.xml"], func(token xml.Token) error {
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "sldSz" {
+			return nil
+		}
+		if value := emuToPx(attr(start, "cx")); value >= 24 {
+			width = value
+		}
+		if value := emuToPx(attr(start, "cy")); value >= 24 {
+			height = value
+		}
+		return nil
+	})
+	return clampFloat(width, 24, 960), clampFloat(height, 24, 540)
+}
+
+func mergePlaceholders(base, over map[string]phBox) map[string]phBox {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	merged := make(map[string]phBox, len(base)+len(over))
+	for key, box := range base {
+		merged[key] = box
+	}
+	for key, box := range over {
+		merged[key] = box
+	}
+	return merged
+}
+
+func imageElements(elements []pptElement) []pptElement {
+	out := make([]pptElement, 0)
+	for _, element := range elements {
+		if element.Kind == "image" && element.Image != "" {
+			out = append(out, element)
+		}
+	}
+	return out
+}
+
+func assembleSlide(bgImage string, pageW, pageH float64, inherited, own []pptElement) ([]pptElement, error) {
+	elements := make([]pptElement, 0, 1+len(inherited)+len(own))
+	if bgImage != "" {
+		elements = append(elements, pptElement{
+			Kind: "image", X: 0, Y: 0,
+			W: clampFloat(pageW, 24, 960), H: clampFloat(pageH, 24, 540),
+			FontSize: 18, Color: "#202124", Align: "left", Image: bgImage,
+		})
+	}
+	elements = append(elements, inherited...)
+	ownStart := len(elements)
+	elements = append(elements, own...)
+	for len(elements) > 40 && ownStart > 0 && (bgImage == "" || ownStart > 1) {
+		drop := ownStart - 1
+		elements = append(elements[:drop], elements[drop+1:]...)
+		ownStart--
+	}
+	if len(elements) > 40 && bgImage != "" {
+		elements = elements[1:]
+	}
+	if len(elements) > 40 {
+		return nil, apperrors.BadRequest(400, "幻灯片元素过多，无法导入")
+	}
+	if elements == nil {
+		elements = []pptElement{}
+	}
+	for i := range elements {
+		elements[i].ID = idAt("e", i+1)
+	}
+	return elements, nil
 }
 
 type slideSource struct {
@@ -384,30 +553,61 @@ func slideParts(files map[string][]byte) ([]slideSource, error) {
 	return parts, nil
 }
 
-type shapeDraft struct {
-	name       string
-	prst       string
-	fill       string
-	color      string
-	align      string
-	font       string
-	text       strings.Builder
-	bold       bool
-	italic     bool
-	underline  bool
-	size       float64
+type phBox struct {
 	x, y, w, h float64
-	hasPos     bool
-	picture    bool
-	image      string
 }
 
-func parseSlide(data []byte, images map[string]string) (string, []pptElement, string, error) {
+type grpState struct {
+	ox, oy, w, h       float64
+	chX, chY, chW, chH float64
+}
+
+type slideParsed struct {
+	background    string
+	ownBackground bool
+	bgImage       string
+	elements      []pptElement
+	notes         string
+	placeholders  map[string]phBox
+}
+
+type pptParse struct {
+	ph     map[string]phBox
+	found  map[string]phBox
+	keep   bool
+	groups []grpState
+}
+
+type shapeDraft struct {
+	name        string
+	prst        string
+	fill        string
+	color       string
+	align       string
+	font        string
+	text        strings.Builder
+	bold        bool
+	italic      bool
+	underline   bool
+	size        float64
+	x, y, w, h  float64
+	hasPos      bool
+	picture     bool
+	image       string
+	placeholder bool
+	phType      string
+	phIdx       string
+}
+
+func parseSlide(data []byte, images map[string]string, inherited map[string]phBox, keepPlaceholders bool) (slideParsed, error) {
 	background := "#ffffff"
+	var bgImage string
+	ownBackground := false
 	var notes strings.Builder
 	var elements []pptElement
 	var stack []string
 	var shapes []*shapeDraft
+	ctx := &pptParse{ph: inherited, found: map[string]phBox{}, keep: keepPlaceholders}
 	inBackground := 0
 	readingText := false
 	fallback := 0
@@ -425,30 +625,71 @@ func parseSlide(data []byte, images map[string]string) (string, []pptElement, st
 			switch node.Name.Local {
 			case "bg":
 				inBackground++
+				ownBackground = true
+			case "grpSp":
+				ctx.groups = append(ctx.groups, grpState{})
 			case "sp":
 				shapes = append(shapes, &shapeDraft{color: "#202124", align: "left", size: 18})
 			case "pic":
 				shapes = append(shapes, &shapeDraft{color: "#202124", align: "left", size: 18, picture: true})
-			case "blip":
-				if shape := topShape(shapes); shape != nil && shape.picture {
-					if data := images[attr(node, "embed")]; data != "" {
-						shape.image = data
+			case "blip", "imagedata":
+				if image := blipImage(node, images); image != "" {
+					switch {
+					case inBackground > 0:
+						bgImage = image
+					case node.Name.Local == "blip" && !hasAncestor(stack, "blipFill"):
+					case topShape(shapes) != nil && topShape(shapes).image == "":
+						topShape(shapes).image = image
 					}
+				}
+			case "ph":
+				if shape := topShape(shapes); shape != nil {
+					shape.placeholder = true
+					shape.phType = attr(node, "type")
+					shape.phIdx = attr(node, "idx")
 				}
 			case "cNvPr":
 				if shape := topShape(shapes); shape != nil && !insideGroup(stack) {
 					shape.name = attr(node, "name")
 				}
 			case "off":
-				if shape := topShape(shapes); shape != nil && parentIs(stack, "xfrm") && !insideGroup(stack) {
-					shape.x = emuToPx(attr(node, "x"))
-					shape.y = emuToPx(attr(node, "y"))
-					shape.hasPos = true
+				if parentIs(stack, "xfrm") {
+					x := emuToPx(attr(node, "x"))
+					y := emuToPx(attr(node, "y"))
+					if shape := topShape(shapes); shape != nil {
+						shape.x = x
+						shape.y = y
+						shape.hasPos = true
+					} else if len(ctx.groups) > 0 && hasAncestor(stack, "grpSpPr") {
+						group := &ctx.groups[len(ctx.groups)-1]
+						group.ox = x
+						group.oy = y
+					}
 				}
 			case "ext":
-				if shape := topShape(shapes); shape != nil && parentIs(stack, "xfrm") && !insideGroup(stack) {
-					shape.w = emuToPx(attr(node, "cx"))
-					shape.h = emuToPx(attr(node, "cy"))
+				if parentIs(stack, "xfrm") {
+					w := emuToPx(attr(node, "cx"))
+					h := emuToPx(attr(node, "cy"))
+					if shape := topShape(shapes); shape != nil {
+						shape.w = w
+						shape.h = h
+					} else if len(ctx.groups) > 0 && hasAncestor(stack, "grpSpPr") {
+						group := &ctx.groups[len(ctx.groups)-1]
+						group.w = w
+						group.h = h
+					}
+				}
+			case "chOff":
+				if parentIs(stack, "xfrm") && len(ctx.groups) > 0 && hasAncestor(stack, "grpSpPr") && topShape(shapes) == nil {
+					group := &ctx.groups[len(ctx.groups)-1]
+					group.chX = emuToPx(attr(node, "x"))
+					group.chY = emuToPx(attr(node, "y"))
+				}
+			case "chExt":
+				if parentIs(stack, "xfrm") && len(ctx.groups) > 0 && hasAncestor(stack, "grpSpPr") && topShape(shapes) == nil {
+					group := &ctx.groups[len(ctx.groups)-1]
+					group.chW = emuToPx(attr(node, "cx"))
+					group.chH = emuToPx(attr(node, "cy"))
 				}
 			case "prstGeom":
 				if shape := topShape(shapes); shape != nil {
@@ -524,11 +765,15 @@ func parseSlide(data []byte, images map[string]string) (string, []pptElement, st
 						shape.text.WriteByte('\n')
 					}
 				}
+			case "grpSp":
+				if len(ctx.groups) > 0 {
+					ctx.groups = ctx.groups[:len(ctx.groups)-1]
+				}
 			case "sp", "pic":
 				if len(shapes) > 0 {
 					shape := shapes[len(shapes)-1]
 					shapes = shapes[:len(shapes)-1]
-					appendShape(shape, &elements, &notes)
+					appendShape(shape, ctx, &elements, &notes)
 				}
 			}
 			if len(stack) > 0 {
@@ -547,18 +792,48 @@ func parseSlide(data []byte, images map[string]string) (string, []pptElement, st
 		return nil
 	})
 	if err != nil {
-		return "", nil, "", err
+		return slideParsed{}, err
 	}
 	if !colorPattern.MatchString(background) {
 		background = "#ffffff"
 	}
-	return background, elements, strings.TrimSpace(notes.String()), nil
+	if elements == nil {
+		elements = []pptElement{}
+	}
+	return slideParsed{
+		background:    background,
+		ownBackground: ownBackground,
+		bgImage:       bgImage,
+		elements:      elements,
+		notes:         strings.TrimSpace(notes.String()),
+		placeholders:  ctx.found,
+	}, nil
 }
 
-func appendShape(shape *shapeDraft, elements *[]pptElement, notes *strings.Builder) {
-	if shape.picture {
+func appendShape(shape *shapeDraft, ctx *pptParse, elements *[]pptElement, notes *strings.Builder) {
+	if shape.hasPos {
+		shape.x, shape.y, shape.w, shape.h = mapGroups(shape.x, shape.y, shape.w, shape.h, ctx.groups)
+	}
+	if !shape.hasPos {
+		if box, ok := findPlaceholder(ctx.ph, shape); ok {
+			shape.x, shape.y, shape.w, shape.h = box.x, box.y, box.w, box.h
+			shape.hasPos = true
+		}
+	}
+	if shape.placeholder && shape.hasPos {
+		rememberPlaceholder(ctx.found, shape)
+	}
+	if shape.placeholder && !ctx.keep {
+		return
+	}
+	if shape.picture || (shape.image != "" && strings.TrimSpace(shape.text.String()) == "") {
 		appendPicture(shape, elements)
 		return
+	}
+	if shape.image != "" {
+		appendPicture(shape, elements)
+		shape.fill = ""
+		shape.prst = ""
 	}
 	text := strings.TrimRight(cleanMultiline(shape.text.String()), "\n")
 	if shape.name == "云笺备注" {
@@ -684,6 +959,73 @@ func parentIs(stack []string, name string) bool {
 		return false
 	}
 	return stack[len(stack)-2] == name
+}
+
+func blipImage(node xml.StartElement, images map[string]string) string {
+	if len(images) == 0 {
+		return ""
+	}
+	for _, name := range []string{"embed", "link", "id"} {
+		if data := images[attr(node, name)]; data != "" {
+			return data
+		}
+	}
+	return ""
+}
+
+func mapGroups(x, y, w, h float64, groups []grpState) (float64, float64, float64, float64) {
+	for i := len(groups) - 1; i >= 0; i-- {
+		group := groups[i]
+		if group.w <= 0 || group.h <= 0 {
+			continue
+		}
+		scaleX, scaleY := 1.0, 1.0
+		if group.chW > 0 {
+			scaleX = group.w / group.chW
+		}
+		if group.chH > 0 {
+			scaleY = group.h / group.chH
+		}
+		x = group.ox + (x-group.chX)*scaleX
+		y = group.oy + (y-group.chY)*scaleY
+		w *= scaleX
+		h *= scaleY
+	}
+	return x, y, w, h
+}
+
+func placeholderKeys(shape *shapeDraft) (string, string) {
+	kind := shape.phType
+	if kind == "" {
+		kind = "body"
+	}
+	idx := shape.phIdx
+	if idx == "" {
+		idx = "0"
+	}
+	return kind + ":" + idx, "idx:" + idx
+}
+
+func rememberPlaceholder(dst map[string]phBox, shape *shapeDraft) {
+	if dst == nil || !shape.placeholder || !shape.hasPos {
+		return
+	}
+	box := phBox{x: shape.x, y: shape.y, w: shape.w, h: shape.h}
+	typed, indexed := placeholderKeys(shape)
+	dst[typed] = box
+	dst[indexed] = box
+}
+
+func findPlaceholder(src map[string]phBox, shape *shapeDraft) (phBox, bool) {
+	if len(src) == 0 || !shape.placeholder {
+		return phBox{}, false
+	}
+	typed, indexed := placeholderKeys(shape)
+	if box, ok := src[typed]; ok {
+		return box, true
+	}
+	box, ok := src[indexed]
+	return box, ok
 }
 
 func insideGroup(stack []string) bool {
