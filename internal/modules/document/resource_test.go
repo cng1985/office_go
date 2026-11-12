@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gorm.io/gorm"
@@ -264,6 +265,25 @@ func TestFoldersKeepDocumentsTogether(t *testing.T) {
 	listed, err := resource.SearchFolders(owner, &FolderSearch{ParentID: &rootID})
 	if err != nil || listed.Total != 1 || listed.Data[0].Name != "归档" {
 		t.Fatalf("folders = %+v err=%v", listed, err)
+	}
+}
+
+func TestLongDocumentSearchIgnoresFolderNameLimit(t *testing.T) {
+	db := openDB(t)
+	owner := scopeOf(t, db, "owner")
+	resource := NewResource(NewRepository(db))
+	title := strings.Repeat("纪", 90)
+	created, err := resource.Create(owner, &DocumentCreateRequest{Kind: KindWord, Title: title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, err := resource.Search(owner, &DocumentSearch{Title: title})
+	if err != nil || docs.Total != 1 || docs.Data[0].ID != created.Data.ID {
+		t.Fatalf("docs = %+v err=%v", docs, err)
+	}
+	folders, err := resource.SearchFolders(owner, &FolderSearch{Name: title})
+	if err != nil || folders.Total != 0 {
+		t.Fatalf("folders = %+v err=%v", folders, err)
 	}
 }
 
