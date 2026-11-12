@@ -14,15 +14,19 @@ import (
 )
 
 const (
-	maxPDFObjects = 20000
-	maxPDFPages   = 300
-	maxPDFStream  = 8 << 20
+	maxPDFObjects   = 20000
+	maxPDFPages     = 300
+	maxPDFStream    = 8 << 20
+	maxPDFFormCalls = 4096
+	maxPDFRuns      = 65536
+	maxPDFOps       = 2000000
 )
 
 var (
 	errPDFSyntax  = errors.New("pdf syntax")
 	errPDFFilter  = errors.New("pdf filter")
 	errPDFEncrypt = errors.New("pdf encrypt")
+	errPDFLimit   = errors.New("pdf limit")
 )
 
 const (
@@ -63,6 +67,9 @@ type pdfDoc struct {
 	root      int
 	encrypted bool
 	depth     int
+	formCalls int
+	runCount  int
+	ops       int
 }
 
 type pdfPageText struct {
@@ -437,6 +444,10 @@ func (d *pdfDoc) parseIndirect(p *pdfParser) (pdfObj, error) {
 	obj, err := p.parseValue()
 	if err != nil {
 		return pdfObj{}, err
+	}
+	// 图片流不参与文字提取。先看子类型，避免 DCTDecode 等图片过滤器把整份文件判成无法读取。
+	if obj.dict["Subtype"].text == "Image" {
+		return obj, nil
 	}
 	p.skip()
 	if !p.consumeWord("stream") {
@@ -1443,6 +1454,7 @@ type pdfInterp struct {
 	leading  float64
 	runs     []pdfRun
 	depth    int
+	seenForm map[int]bool
 }
 
 func (in *pdfInterp) run(data []byte, res pdfResources) error {
@@ -1455,6 +1467,10 @@ func (in *pdfInterp) run(data []byte, res pdfResources) error {
 		p.skip()
 		if p.i >= len(p.b) {
 			return nil
+		}
+		in.doc.ops++
+		if in.doc.ops > maxPDFOps {
+			return errPDFLimit
 		}
 		tok, err := p.contentTok()
 		if err != nil {
@@ -1527,16 +1543,16 @@ func (in *pdfInterp) exec(op string, stack *[]pdfTok) error {
 		}
 	case "Tj":
 		if raw, ok := popRaw(stack); ok {
-			in.show(raw)
+			return in.show(raw)
 		}
 	case "TJ":
 		if arr, ok := popArr(stack); ok {
-			in.showArray(arr)
+			return in.showArray(arr)
 		}
 	case "'":
 		if raw, ok := popRaw(stack); ok {
 			in.translate(0, -in.leading)
-			in.show(raw)
+			return in.show(raw)
 		}
 	case "\"":
 		raw, ok1 := popRaw(stack)
@@ -1544,7 +1560,7 @@ func (in *pdfInterp) exec(op string, stack *[]pdfTok) error {
 		_, ok3 := popNum(stack)
 		if ok1 && ok2 && ok3 {
 			in.translate(0, -in.leading)
-			in.show(raw)
+			return in.show(raw)
 		}
 	case "Do":
 		name, ok := popName(stack)
@@ -1562,7 +1578,7 @@ func (in *pdfInterp) translate(tx, ty float64) {
 	in.tm = in.tlm
 }
 
-func (in *pdfInterp) show(raw []byte) {
+func (in *pdfInterp) show(raw []byte) error {
 	var text string
 	if in.font != nil {
 		text = in.font.decode(raw)
@@ -1570,13 +1586,13 @@ func (in *pdfInterp) show(raw []byte) {
 		text = decodePlain(raw)
 	}
 	if text == "" {
-		return
+		return nil
 	}
 	x, y := in.ctm.mul(in.tm).pt(0, 0)
-	in.runs = append(in.runs, pdfRun{x: x, y: y, size: in.visualSize(), text: text})
+	return in.addRun(pdfRun{x: x, y: y, size: in.visualSize(), text: text})
 }
 
-func (in *pdfInterp) showArray(arr []pdfTok) {
+func (in *pdfInterp) showArray(arr []pdfTok) error {
 	var b strings.Builder
 	for _, tok := range arr {
 		if tok.kind == 'n' && tok.num <= -200 {
@@ -1591,10 +1607,19 @@ func (in *pdfInterp) showArray(arr []pdfTok) {
 		}
 	}
 	if b.Len() == 0 {
-		return
+		return nil
 	}
 	x, y := in.ctm.mul(in.tm).pt(0, 0)
-	in.runs = append(in.runs, pdfRun{x: x, y: y, size: in.visualSize(), text: b.String()})
+	return in.addRun(pdfRun{x: x, y: y, size: in.visualSize(), text: b.String()})
+}
+
+func (in *pdfInterp) addRun(run pdfRun) error {
+	in.doc.runCount++
+	if in.doc.runCount > maxPDFRuns {
+		return errPDFLimit
+	}
+	in.runs = append(in.runs, run)
+	return nil
 }
 
 func (in *pdfInterp) visualSize() float64 {
@@ -1617,12 +1642,30 @@ func (in *pdfInterp) doForm(name string) error {
 		return nil
 	}
 	obj, err := in.doc.load(id)
-	if err != nil || obj.dict["Subtype"].text == "Image" || !obj.hasStream {
+	if err != nil {
+		if errors.Is(err, errPDFFilter) {
+			return nil
+		}
 		return err
+	}
+	if obj.dict["Subtype"].text == "Image" || !obj.hasStream {
+		return nil
 	}
 	if obj.dict["Subtype"].text != "Form" && obj.dict["BBox"].kind != objArray {
 		return nil
 	}
+	if in.seenForm[id] {
+		return nil
+	}
+	if in.doc.formCalls >= maxPDFFormCalls {
+		return errPDFLimit
+	}
+	in.doc.formCalls++
+	if in.seenForm == nil {
+		in.seenForm = map[int]bool{}
+	}
+	in.seenForm[id] = true
+	defer delete(in.seenForm, id)
 	res := in.res
 	if obj.dict["Resources"].kind != 0 {
 		res, err = in.doc.parseResources(obj.dict["Resources"])

@@ -583,6 +583,8 @@ func pdfReadError(err error) error {
 		return apperrors.BadRequest(400, "这份 PDF 已加密，无法导入")
 	case errors.Is(err, errPDFFilter):
 		return apperrors.BadRequest(400, "这份 PDF 的文字暂时无法读取")
+	case errors.Is(err, errPDFLimit):
+		return apperrors.BadRequest(400, "这份 PDF 过于复杂，无法导入")
 	default:
 		return apperrors.BadRequest(400, "无法读取这份 PDF")
 	}

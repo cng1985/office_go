@@ -257,6 +257,50 @@ func pdfBlockTexts(t *testing.T, content []byte) []string {
 	return out
 }
 
+func TestPDFSkipsImagesAndBoundsForms(t *testing.T) {
+	jpeg := []byte{0xff, 0xd8, 0xff, 0xd9}
+	content := "BT (Hello) Tj ET\n/Im0 Do"
+	image := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream", len(jpeg), jpeg)
+	page := "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>"
+	body := fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content)
+	if _, _, got, err := ImportFile("图.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		page,
+		body,
+		image,
+	}, "")); err != nil || !bytes.Contains(got, []byte("Hello")) {
+		t.Fatal(err, string(got))
+	}
+
+	form := "BT (Hello) Tj ET\n/Fm Do"
+	pageText := "BT (Page) Tj ET\n/Fm Do"
+	if _, _, got, err := ImportFile("循环.pdf", formPDF(pageText, form)); err != nil || strings.Count(string(got), "Hello") != 1 || !bytes.Contains(got, []byte("Page")) {
+		t.Fatal(err, string(got))
+	}
+
+	if _, _, got, err := ImportFile("表单.pdf", formPDF("/Fm Do\n/Fm Do", "BT (Hi) Tj ET")); err != nil || !bytes.Contains(got, []byte("Hi")) {
+		t.Fatal(err, string(got))
+	}
+	var many strings.Builder
+	for i := 0; i < maxPDFFormCalls+1; i++ {
+		many.WriteString("/Fm Do\n")
+	}
+	if _, _, _, err := ImportFile("过多.pdf", formPDF(many.String(), "BT (Hi) Tj ET")); err == nil || !strings.Contains(err.Error(), "过于复杂") {
+		t.Fatal(err)
+	}
+}
+
+func formPDF(content, form string) []byte {
+	return assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		fmt.Sprintf("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length %d >>\nstream\n%s\nendstream", len(form), form),
+	}, "")
+}
+
 func assemblePDF(objects []string, trailer string) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("%PDF-1.4\n")
