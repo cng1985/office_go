@@ -29,6 +29,7 @@ import {
   stepCell,
   uniqueSheetName,
   visibleCell,
+  rowWindow,
   usedBounds,
   writeInput,
 } from '../editors/excel'
@@ -44,7 +45,13 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'update:title', 'save', 'versions'])
 const session = useSessionStore()
 
+const ROW_HEIGHT = 21
+const CELL_BUDGET = 4000
 const rootRef = ref(null)
+const wrapRef = ref(null)
+const scrollTop = ref(0)
+const viewHeight = ref(640)
+const printing = ref(false)
 const editorRef = ref(null)
 const catcher = ref(null)
 const composing = ref(false)
@@ -81,8 +88,40 @@ const active = computed(() => {
   return Math.min(Math.max(0, requested), Math.max(0, sheets.value.length - 1))
 })
 const sheet = computed(() => sheets.value[active.value] || { name: 'Sheet1', row_count: 1, col_count: 1, cells: [] })
-const rows = computed(() => Array.from({ length: sheet.value.row_count || 1 }, (_, index) => index + 1))
 const cols = computed(() => Array.from({ length: sheet.value.col_count || 1 }, (_, index) => index + 1))
+const gridLarge = computed(() => (sheet.value.row_count || 1) * (sheet.value.col_count || 1) > CELL_BUDGET)
+const renderedRows = computed(() => {
+  const total = sheet.value.row_count || 1
+  const query = filterText.value.trim()
+  let source = null
+  if (filterOn.value && query) {
+    source = []
+    for (let row = 1; row <= total; row += 1) {
+      if (rowVisible(row)) source.push(row)
+    }
+  }
+  const count = source ? source.length : total
+  const windowed = !printing.value && (source ? count * (sheet.value.col_count || 1) > CELL_BUDGET : gridLarge.value)
+  if (!windowed) {
+    if (source) return { rows: source, padTop: 0, padBottom: 0 }
+    const rows = []
+    for (let row = 1; row <= total; row += 1) rows.push(row)
+    return { rows, padTop: 0, padBottom: 0 }
+  }
+  const frame = rowWindow({
+    rowCount: count,
+    scrollTop: scrollTop.value / (zoom.value || 1),
+    viewHeight: viewHeight.value / (zoom.value || 1),
+    merges: source ? [] : (sheet.value.cells || []),
+  })
+  const rows = []
+  if (source) {
+    for (let index = frame.start; index <= frame.end; index += 1) rows.push(source[index - 1])
+  } else {
+    for (let row = frame.start; row <= frame.end; row += 1) rows.push(row)
+  }
+  return { rows, padTop: frame.padTop, padBottom: frame.padBottom }
+})
 const range = computed(() => ({
   r1: Math.min(anchor.value.row, focusCell.value.row),
   r2: Math.max(anchor.value.row, focusCell.value.row),
@@ -233,15 +272,24 @@ function cellStyle(row, col) {
   }
 }
 
-function covered(row, col) {
+const coveredKeys = computed(() => {
+  const set = new Set()
   for (const cell of sheet.value.cells || []) {
-    const rows = cell.merge_rows || 1
-    const cols = cell.merge_cols || 1
-    if (rows === 1 && cols === 1) continue
-    if (row === cell.row && col === cell.col) continue
-    if (row >= cell.row && row < cell.row + rows && col >= cell.col && col < cell.col + cols) return true
+    const spanRows = cell.merge_rows || 1
+    const spanCols = cell.merge_cols || 1
+    if (spanRows === 1 && spanCols === 1) continue
+    for (let row = cell.row; row < cell.row + spanRows; row += 1) {
+      for (let col = cell.col; col < cell.col + spanCols; col += 1) {
+        if (row === cell.row && col === cell.col) continue
+        set.add(`${row},${col}`)
+      }
+    }
   }
-  return false
+  return set
+})
+
+function covered(row, col) {
+  return coveredKeys.value.has(`${row},${col}`)
 }
 
 function spanOf(row, col, axis) {
@@ -379,10 +427,56 @@ function jump(dRow, dCol, extend = false) {
   focusGrid()
 }
 
+function rowOffset(row) {
+  const total = sheet.value.row_count || 1
+  if (!(filterOn.value && filterText.value.trim())) return row - 1
+  let index = 0
+  for (let current = 1; current <= total; current += 1) {
+    if (!rowVisible(current)) continue
+    if (current === row) return index
+    index += 1
+  }
+  return -1
+}
+
 function scrollIntoView(row, col) {
+  const wrap = wrapRef.value
+  const frame = renderedRows.value
+  if (wrap && (frame.padTop || frame.padBottom)) {
+    const index = rowOffset(row)
+    if (index >= 0) {
+      const scale = zoom.value || 1
+      const top = index * ROW_HEIGHT * scale
+      const bottom = top + ROW_HEIGHT * scale
+      const header = 24 * scale
+      if (top < wrap.scrollTop) wrap.scrollTop = Math.max(0, top)
+      else if (bottom + header > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = Math.max(0, bottom + header - wrap.clientHeight)
+      scrollTop.value = wrap.scrollTop
+    }
+  }
   nextTick(() => {
     rootRef.value?.querySelector(`[data-row="${row}"][data-col="${col}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   })
+}
+
+function nudgeScroll(event) {
+  const wrap = wrapRef.value
+  if (!wrap) return
+  const box = wrap.getBoundingClientRect()
+  const edge = 28
+  let next = wrap.scrollTop
+  if (event.clientY > box.bottom - edge) next += 36
+  else if (event.clientY < box.top + edge) next -= 36
+  if (next !== wrap.scrollTop) {
+    wrap.scrollTop = Math.max(0, next)
+    scrollTop.value = wrap.scrollTop
+  }
+  if (event.clientX > box.right - edge) wrap.scrollLeft += 36
+  else if (event.clientX < box.left + edge) wrap.scrollLeft = Math.max(0, wrap.scrollLeft - 36)
+}
+
+function onSheetScroll(event) {
+  scrollTop.value = event.target.scrollTop
 }
 
 function beginEdit(initial, source = 'cell') {
@@ -515,6 +609,7 @@ function onCellMouseDown(event, row, col) {
 }
 
 function onSelectMove(event) {
+  nudgeScroll(event)
   const cell = cellFromPoint(event.clientX, event.clientY)
   if (cell) focusCell.value = cell
 }
@@ -566,6 +661,7 @@ function onFillDown(event) {
 }
 
 function onFillMove(event) {
+  nudgeScroll(event)
   const cell = cellFromPoint(event.clientX, event.clientY)
   if (!cell) return
   const box = range.value
@@ -921,8 +1017,14 @@ function sortSheet(direction) {
   emitUpdate()
 }
 
+function resetSheetScroll() {
+  scrollTop.value = 0
+  if (wrapRef.value) wrapRef.value.scrollTop = 0
+}
+
 function switchSheet(index) {
   if (editing.value) commitEdit(0, 0)
+  resetSheetScroll()
   if (props.readonly) {
     previewActive.value = index
     anchor.value = { row: 1, col: 1 }
@@ -1154,9 +1256,31 @@ watch(() => props.modelValue, () => {
   if (focusCell.value.col > (sheet.value.col_count || 1)) focusCell.value = { row: 1, col: 1 }
 })
 
-onMounted(() => window.addEventListener('keydown', onWindowKey))
+let sheetObserver
+function measureSheet() {
+  if (wrapRef.value) viewHeight.value = wrapRef.value.clientHeight || viewHeight.value
+}
+function onBeforePrint() {
+  printing.value = true
+}
+function onAfterPrint() {
+  printing.value = false
+}
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKey)
+  window.addEventListener('beforeprint', onBeforePrint)
+  window.addEventListener('afterprint', onAfterPrint)
+  measureSheet()
+  if (typeof ResizeObserver !== 'undefined' && wrapRef.value) {
+    sheetObserver = new ResizeObserver(measureSheet)
+    sheetObserver.observe(wrapRef.value)
+  }
+})
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKey)
+  window.removeEventListener('beforeprint', onBeforePrint)
+  window.removeEventListener('afterprint', onAfterPrint)
+  sheetObserver?.disconnect()
   stopDrag()
 })
 </script>
@@ -1413,7 +1537,7 @@ onBeforeUnmount(() => {
         @keydown.esc.prevent="cancelEdit"
       />
     </div>
-    <div class="sheet-wrap">
+    <div class="sheet-wrap" ref="wrapRef" @scroll="onSheetScroll">
       <div class="sheet-zoom" :style="{ zoom }">
       <table class="sheet">
         <thead>
@@ -1426,7 +1550,10 @@ onBeforeUnmount(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="row" v-show="rowVisible(row)">
+          <tr v-if="renderedRows.padTop" class="row-pad">
+            <td :colspan="cols.length + 1" :style="{ height: `${renderedRows.padTop}px` }"></td>
+          </tr>
+          <tr v-for="row in renderedRows.rows" :key="row">
             <th class="row-head" :class="{ hot: rowHot(row) }" @click="selectRow(row, $event.shiftKey)">{{ row }}</th>
             <template v-for="col in cols" :key="col">
             <td
@@ -1472,6 +1599,9 @@ onBeforeUnmount(() => {
               ></i>
             </td>
             </template>
+          </tr>
+          <tr v-if="renderedRows.padBottom" class="row-pad">
+            <td :colspan="cols.length + 1" :style="{ height: `${renderedRows.padBottom}px` }"></td>
           </tr>
         </tbody>
       </table>

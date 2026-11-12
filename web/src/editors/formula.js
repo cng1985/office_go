@@ -1,5 +1,5 @@
-const MAX_ROW = 120
-const MAX_COL = 30
+export const MAX_ROW = 1000
+export const MAX_COL = 100
 
 export function columnLabel(col) {
   let n = col
@@ -85,24 +85,21 @@ export function displayCell(model, row, col, workbook) {
 
 export function sheetDisplay(sheet, workbook) {
   const cache = new Map()
+  const index = cellIndex(workbook, sheet)
   const shown = {}
-  const rows = sheet?.row_count || 0
-  const cols = sheet?.col_count || 0
-  for (let row = 1; row <= rows; row += 1) {
-    for (let col = 1; col <= cols; col += 1) {
-      const result = evaluateCell(sheet, row, col, cache, new Set(), workbook)
-      shown[`${row},${col}`] = formatResult(result, cellRecord(sheet, row, col))
-    }
+  for (const cell of sheet?.cells || []) {
+    const result = evaluateCell(sheet, cell.row, cell.col, cache, new Set(), workbook, index)
+    shown[`${cell.row},${cell.col}`] = formatResult(result, cell)
   }
   return shown
 }
 
-export function evaluateCell(model, row, col, cache = new Map(), stack = new Set(), workbook = null) {
+export function evaluateCell(model, row, col, cache = new Map(), stack = new Set(), workbook = null, index = null) {
   const sheetName = model?.name || ''
   const key = `${sheetName}!${row},${col}`
   if (cache.has(key)) return cache.get(key)
   if (stack.has(key)) return { error: '#CYCLE!' }
-  const record = cellRecord(model, row, col)
+  const record = cellRecord(model, row, col, index)
   const input = record ? String(record.input || '') : ''
   stack.add(key)
   let result
@@ -112,7 +109,7 @@ export function evaluateCell(model, row, col, cache = new Map(), stack = new Set
       result = parseFormula(input.slice(1), (sheet, nextRow, nextCol) => {
         const target = sheet ? findSheet(workbook, model, sheet) : model
         if (!target) return { error: '#REF!' }
-        return evaluateCell(target, nextRow, nextCol, cache, stack, workbook)
+        return evaluateCell(target, nextRow, nextCol, cache, stack, workbook, index)
       }, { row, col })
     } catch (error) {
       result = { error: error.message || '#VALUE!' }
@@ -123,6 +120,16 @@ export function evaluateCell(model, row, col, cache = new Map(), stack = new Set
   stack.delete(key)
   cache.set(key, result)
   return result
+}
+
+function cellIndex(workbook, fallback) {
+  const index = new Map()
+  const sheets = workbook?.sheets?.length ? workbook.sheets : [fallback]
+  for (const item of sheets) {
+    const name = item?.name || ''
+    for (const cell of item?.cells || []) index.set(`${name}!${cell.row},${cell.col}`, cell)
+  }
+  return index
 }
 
 export function formatNumber(value) {
@@ -211,7 +218,8 @@ function sheetPrefix(prefix) {
   return (named[1] || named[2] || '').replace(/''/g, "'")
 }
 
-function cellRecord(model, row, col) {
+function cellRecord(model, row, col, index) {
+  if (index) return index.get(`${model?.name || ''}!${row},${col}`) || null
   return (model?.cells || []).find((item) => item.row === row && item.col === col) || null
 }
 

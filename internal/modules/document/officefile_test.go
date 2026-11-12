@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -391,6 +392,49 @@ func TestSeparateNumberedListsRestart(t *testing.T) {
 	if strings.Count(numbering, `<w:startOverride w:val="1"/>`) != 3 {
 		t.Fatalf("numbering = %s", numbering)
 	}
+}
+
+func TestTallExcelImports(t *testing.T) {
+	kind, _, content, err := ImportFile("宽表.xlsx", excelGridFile(t, maxExcelRows, maxExcelCols))
+	if err != nil || kind != KindExcel || !bytes.Contains(content, []byte("末格")) || !bytes.Contains(content, []byte(fmt.Sprintf(`"row":%d`, maxExcelRows))) {
+		t.Fatalf("import wide = %s %v", content, err)
+	}
+	if _, _, _, err = ImportFile("过高.xlsx", excelGridFile(t, maxExcelRows+1, 1)); err == nil || !strings.Contains(err.Error(), "表格超过") {
+		t.Fatal(err)
+	}
+	if _, _, _, err = ImportFile("过宽.xlsx", excelGridFile(t, 1, maxExcelCols+1)); err == nil || !strings.Contains(err.Error(), "表格超过") {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte("甲,乙\n"), 121)
+	kind, _, content, err = ImportFile("名单.csv", body)
+	if err != nil || kind != KindExcel || !bytes.Contains(content, []byte(`"row":121`)) {
+		t.Fatalf("csv = %s %v", content, err)
+	}
+}
+
+func excelGridFile(t *testing.T, rows, cols int) []byte {
+	t.Helper()
+	var sheet strings.Builder
+	sheet.WriteString(officeXMLHeader)
+	sheet.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>`)
+	for _, row := range []int{1, rows} {
+		if row < 1 {
+			continue
+		}
+		fmt.Fprintf(&sheet, `<row r="%d"><c r="%s%d" t="inlineStr"><is><t>末格</t></is></c></row>`, row, colName(cols), row)
+		if rows == 1 {
+			break
+		}
+	}
+	sheet.WriteString(`</sheetData></worksheet>`)
+	raw, err := packZip(map[string]string{
+		"xl/workbook.xml":          officeXMLHeader + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"></workbook>`,
+		"xl/worksheets/sheet1.xml": sheet.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func extOf(kind string) string {

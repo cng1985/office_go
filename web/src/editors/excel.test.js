@@ -9,6 +9,7 @@ import {
   insertRows,
   normalizeWorkbook,
   pasteCells,
+  rowWindow,
   pasteCut,
   pasteValues,
   renameSheetRefs,
@@ -227,6 +228,19 @@ test('arrow movement skips coordinates covered by a merge', () => {
   assert.deepEqual(stepCell(sheet, 1, 3, 0, -1), { row: 1, col: 1 })
   assert.deepEqual(stepCell(sheet, 1, 1, 1, 0), { row: 3, col: 1 })
   assert.deepEqual(stepCell(sheet, 1, 1, 0, -1), { row: 1, col: 1 })
+})
+
+test('a tall sheet window keeps a merge that crosses the top', () => {
+  const frame = rowWindow({
+    rowCount: 1000,
+    scrollTop: 21 * 40,
+    viewHeight: 21 * 20,
+    merges: [{ row: 30, merge_rows: 20 }],
+  })
+  assert.ok(frame.start <= 30)
+  assert.ok(frame.end >= 49)
+  assert.equal(frame.padTop, (frame.start - 1) * 21)
+  assert.equal(frame.padBottom, (1000 - frame.end) * 21)
 })
 
 test('paste shifts formulas from their original cells', () => {
