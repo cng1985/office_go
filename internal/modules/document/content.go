@@ -35,6 +35,7 @@ type wordBlock struct {
 	Runs    []wordRun `json:"runs"`
 	Indent  int       `json:"indent,omitempty"`
 	Spacing string    `json:"spacing,omitempty"`
+	Image   string    `json:"image,omitempty"`
 }
 
 type wordRun struct {
@@ -223,6 +224,13 @@ func validateWord(content *wordContent) error {
 		seen[block.ID] = struct{}{}
 		switch block.Type {
 		case "paragraph", "heading1", "heading2", "heading3", "bullet", "numbered", "quote", "break":
+			if block.Image != "" {
+				return apperrors.BadRequest(400, "图片内容无效")
+			}
+		case "image":
+			if err := validateWordImage(block.Image); err != nil {
+				return err
+			}
 		default:
 			return apperrors.BadRequest(400, "文稿段落类型无效")
 		}

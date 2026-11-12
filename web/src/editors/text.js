@@ -114,12 +114,12 @@ export function clampFindIndex(index, count) {
   return Math.min(index, count - 1)
 }
 
-// 段首退格：前面是分页符时只删分页符，段落文字留在原地；否则并入上一段。
+// 段首退格：前面是分页符或图片时只去掉那一块，段落文字留在原地；否则并入上一段。
 export function collapseBackward(blocks, index) {
   const previous = blocks[index - 1]
   const current = blocks[index]
   if (!previous || !current) return null
-  if (previous.type === 'break') {
+  if (previous.type === 'break' || previous.type === 'image') {
     blocks.splice(index - 1, 1)
     return { index: index - 1, offset: 0 }
   }

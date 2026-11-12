@@ -58,6 +58,19 @@ test('styles, lists and find follow the edited range', () => {
   assert.equal(plainText(replaceOnce(blocks[0].runs, 0, 1, '丙')), '丙')
 })
 
+test('backspace before a paragraph removes the image and keeps the text', () => {
+  const blocks = [
+    { id: 'a', type: 'image', align: 'left', image: 'data:image/jpeg;base64,aaaa', runs: [{ text: '' }] },
+    { id: 'b', type: 'paragraph', align: 'left', runs: [{ text: 'Hello' }] },
+  ]
+  const result = collapseBackward(blocks, 1)
+  assert.equal(result.index, 0)
+  assert.equal(result.offset, 0)
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, 'paragraph')
+  assert.equal(plainText(blocks[0].runs), 'Hello')
+})
+
 test('page break backspace keeps the following paragraph', () => {
   const blocks = [
     { id: 'a', type: 'paragraph', align: 'left', runs: [{ text: '上文' }] },

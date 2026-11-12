@@ -68,7 +68,7 @@ const pages = computed(() => {
   })
   return groups
 })
-const blank = computed(() => props.modelValue.blocks.every((block) => block.type !== 'break' && !plainText(block.runs).trim()))
+const blank = computed(() => props.modelValue.blocks.every((block) => block.type !== 'break' && block.type !== 'image' && !plainText(block.runs).trim()))
 const hits = computed(() => findHits(props.modelValue.blocks, findQuery.value))
 const stats = computed(() => {
   const texts = props.modelValue.blocks.map((block) => plainText(block.runs))
@@ -176,7 +176,7 @@ function refreshAll() {
   nextTick(() => {
     props.modelValue.blocks.forEach((block, index) => {
       const element = elements.value[index]
-      if (!element || block.type === 'break') return
+      if (!element || block.type === 'break' || block.type === 'image') return
       renderRuns(element, block.runs)
       element.dataset.ready = '1'
     })
@@ -184,7 +184,7 @@ function refreshAll() {
 }
 function focusPage(event) {
   if (props.readonly || event.target.closest('.word-block, .word-suggest, button')) return
-  const index = Math.max(0, props.modelValue.blocks.findIndex((block) => block.type !== 'break'))
+  const index = Math.max(0, props.modelValue.blocks.findIndex((block) => block.type !== 'break' && block.type !== 'image'))
   focusBlock(index)
 }
 function focusBlock(index) {
@@ -279,7 +279,7 @@ function paint(index, caret) {
 function applyPatch(patch) {
   if (props.readonly) return
   const block = props.modelValue.blocks[active.value]
-  if (!block || block.type === 'break') return
+  if (!block || block.type === 'break' || block.type === 'image') return
   const range = rangeOf()
   if (range.start !== range.end) {
     checkpoint()
@@ -317,7 +317,7 @@ function markOn(mark) {
 }
 function setType(type) {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break') return
+  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
   checkpoint()
   block.type = type
   touch()
@@ -326,7 +326,7 @@ function setType(type) {
 }
 function setAlign(value) {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break') return
+  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
   checkpoint()
   block.align = value
   touch()
@@ -334,7 +334,7 @@ function setAlign(value) {
 }
 function setSpacing(value) {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break') return
+  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
   checkpoint()
   if (value) block.spacing = value
   else delete block.spacing
@@ -365,7 +365,7 @@ function printDoc() {
 }
 function changeIndent(delta) {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break') return
+  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
   checkpoint()
   const indent = Math.max(0, Math.min(8, (block.indent || 0) + delta))
   if (indent) block.indent = indent
@@ -374,7 +374,7 @@ function changeIndent(delta) {
 }
 function clearFormat() {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break') return
+  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
   const range = rangeOf()
   checkpoint()
   if (range.start !== range.end) {
@@ -509,7 +509,7 @@ function splitBlock(index) {
   if (props.modelValue.blocks.length >= maxWordBlocks) return
   const element = elements.value[index]
   const block = props.modelValue.blocks[index]
-  if (!block || block.type === 'break') return
+  if (!block || block.type === 'break' || block.type === 'image') return
   const selected = element ? selectionRange(element) : null
   const text = plainText(block.runs)
   const offset = selected ? selected.start : text.length
@@ -557,6 +557,27 @@ function mergeBackward(index) {
   touch()
   nextTick(() => paint(result.index, result.offset))
   active.value = result.index
+}
+function onImageKey(index, event) {
+  if (props.readonly) return
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    event.preventDefault()
+    checkpoint()
+    if (props.modelValue.blocks.length <= 1) {
+      props.modelValue.blocks.splice(0, 1, { id: newId(), type: 'paragraph', align: 'left', runs: emptyRuns() })
+    } else {
+      props.modelValue.blocks.splice(index, 1)
+    }
+    touch()
+    return
+  }
+  if (event.key === 'Enter' && props.modelValue.blocks.length < maxWordBlocks) {
+    event.preventDefault()
+    checkpoint()
+    props.modelValue.blocks.splice(index + 1, 0, { id: newId(), type: 'paragraph', align: 'left', runs: emptyRuns() })
+    touch()
+    nextTick(() => focusBlock(index + 1))
+  }
 }
 function onKey(index, event) {
   if (props.readonly) return
@@ -651,7 +672,7 @@ function insertBreak() {
 }
 function insertToday() {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break') return
+  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
   const range = rangeOf()
   const text = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date())
   checkpoint()
@@ -977,6 +998,17 @@ watch(() => props.modelValue, refreshAll)
             <article class="word-page" data-testid="word-page" @mousedown="focusPage">
               <template v-for="(block, index) in modelValue.blocks" :key="block.id">
                 <div v-if="block.type === 'break'" class="page-break-line"><span>分页符</span></div>
+                <div
+                  v-else-if="block.type === 'image'"
+                  class="word-image"
+                  :class="{ active: active === index }"
+                  data-testid="pdf-image"
+                  tabindex="0"
+                  @focus="active = index"
+                  @keydown="onImageKey(index, $event)"
+                >
+                  <img :src="block.image" alt="" />
+                </div>
                 <div
                   v-else
                   class="word-line"
