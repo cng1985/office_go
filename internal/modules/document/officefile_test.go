@@ -791,7 +791,7 @@ func TestImageLayoutRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(parts["word/document.xml"], []byte(`w:val="center"`)) || !bytes.Contains(parts["word/document.xml"], []byte(`cx="45720"`)) {
+	if !bytes.Contains(parts["word/document.xml"], []byte(`w:val="center"`)) || !bytes.Contains(parts["word/document.xml"], []byte(fmt.Sprintf(`cx="%d"`, wordContentEMU*40/100))) {
 		t.Fatalf("word extent = %s", parts["word/document.xml"])
 	}
 	_, _, wordAgain, err := ImportFile("排版.docx", wordFile.Body)
@@ -862,7 +862,30 @@ func TestImageLayoutRoundTrip(t *testing.T) {
 		t.Fatalf("slides = %+v", imported.Slides)
 	}
 	picture := imported.Slides[0].Elements[1]
-	if picture.Kind != "image" || picture.X != 120 || picture.Y != 80 || picture.W != 400 || picture.H != 220 || !strings.HasPrefix(picture.Image, jpegDataPrefix) || picture.Text != "" {
+	if picture.Kind != "image" || picture.X != 155 || picture.Y != 80 || picture.W != 330 || picture.H != 220 || !strings.HasPrefix(picture.Image, jpegDataPrefix) || picture.Text != "" {
 		t.Fatalf("picture = %+v", picture)
+	}
+
+	jpegBytes := solidJPEG(t, color.RGBA{R: 20, G: 80, B: 200, A: 255})
+	document := officeXMLHeader + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:t>两端</w:t></w:r><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p></w:body></w:document>`
+	rels := officeXMLHeader + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.jpg"/></Relationships>`
+	body, err := packZip(map[string]string{
+		"word/document.xml":            document,
+		"word/_rels/document.xml.rels": rels,
+		"word/media/image1.jpg":        string(jpegBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, justified, err := ImportFile("两端.docx", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var justifiedDoc wordContent
+	if err := json.Unmarshal(justified, &justifiedDoc); err != nil {
+		t.Fatal(err)
+	}
+	if len(justifiedDoc.Blocks) < 2 || plainWord(justifiedDoc.Blocks[0]) != "两端" || justifiedDoc.Blocks[0].Align != "justify" || justifiedDoc.Blocks[1].Type != "image" || justifiedDoc.Blocks[1].Align != "left" {
+		t.Fatalf("justified image = %+v", justifiedDoc.Blocks)
 	}
 }

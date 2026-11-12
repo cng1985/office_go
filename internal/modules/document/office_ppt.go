@@ -189,10 +189,27 @@ func slideXML(slide pptSlide) (string, [][]byte) {
 }
 
 func writePPTPicture(body *strings.Builder, element pptElement, id, rel int) {
+	x, y, w, h := containedPicture(element)
 	fmt.Fprintf(body, `<p:pic><p:nvPicPr><p:cNvPr id="%d" name="云笺图片"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>`, id)
 	fmt.Fprintf(body, `<p:blipFill><a:blip r:embed="rId%d"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>`, rel)
 	fmt.Fprintf(body, `<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`,
-		pxToEmu(element.X), pxToEmu(element.Y), pxToEmu(element.W), pxToEmu(element.H))
+		pxToEmu(x), pxToEmu(y), pxToEmu(w), pxToEmu(h))
+}
+
+func containedPicture(element pptElement) (x, y, w, h float64) {
+	x, y, w, h = element.X, element.Y, element.W, element.H
+	raw, ok := jpegPayload(element.Image)
+	if !ok || w <= 0 || h <= 0 {
+		return x, y, w, h
+	}
+	iw, ih, _, ok := jpegInfo(raw)
+	if !ok || iw < 1 || ih < 1 {
+		return x, y, w, h
+	}
+	scale := math.Min(w/float64(iw), h/float64(ih))
+	dw := float64(iw) * scale
+	dh := float64(ih) * scale
+	return x + (w-dw)/2, y + (h-dh)/2, dw, dh
 }
 
 func writePPTShape(body *strings.Builder, element pptElement, id int, name string) {

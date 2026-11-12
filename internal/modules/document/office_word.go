@@ -188,15 +188,25 @@ func writeWordParagraph(body *strings.Builder, block wordBlock, numID int) {
 	body.WriteString("</w:p>")
 }
 
+const wordContentEMU = 5943600
+
 func writeWordImage(body *strings.Builder, block wordBlock, n int) {
 	raw, ok := jpegPayload(block.Image)
 	if !ok {
 		return
 	}
-	cx, cy := wordImageExtent(raw)
-	if block.Width >= 20 && block.Width < 100 {
-		cx = cx * block.Width / 100
-		cy = cy * block.Width / 100
+	percent := block.Width
+	if percent < 20 || percent > 100 {
+		percent = 100
+	}
+	iw, ih, _, ok := jpegInfo(raw)
+	if !ok || iw < 1 || ih < 1 {
+		iw, ih = 3, 2
+	}
+	cx := wordContentEMU * percent / 100
+	cy := cx * ih / iw
+	if cy < 1 {
+		cy = 1
 	}
 	fmt.Fprintf(body, `<w:p><w:pPr><w:jc w:val="%s"/></w:pPr>`, wordAlignOut(block.Align))
 	fmt.Fprintf(body, `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="%d" cy="%d"/>`, cx, cy)
@@ -206,19 +216,11 @@ func writeWordImage(body *strings.Builder, block wordBlock, n int) {
 	fmt.Fprintf(body, `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`, cx, cy)
 }
 
-func imageWidthPercent(dataURL string, cx int) int {
+func imageWidthPercent(cx int) int {
 	if cx <= 0 {
 		return 0
 	}
-	raw, ok := jpegPayload(dataURL)
-	if !ok {
-		return 0
-	}
-	natural, _ := wordImageExtent(raw)
-	if natural <= 0 {
-		return 0
-	}
-	percent := (cx*100 + natural/2) / natural
+	percent := (cx*100 + wordContentEMU/2) / wordContentEMU
 	if percent >= 95 {
 		return 0
 	}
@@ -229,28 +231,6 @@ func imageWidthPercent(dataURL string, cx int) int {
 		return 100
 	}
 	return percent
-}
-
-func wordImageExtent(data []byte) (int, int) {
-	width, height, _, ok := jpegInfo(data)
-	if !ok {
-		return 5486400, 3200400
-	}
-	const emuPerPixel = 9525
-	const maxWidth = 5943600
-	cx := width * emuPerPixel
-	cy := height * emuPerPixel
-	if cx > maxWidth && cx > 0 {
-		cy = cy * maxWidth / cx
-		cx = maxWidth
-	}
-	if cx < emuPerPixel {
-		cx = emuPerPixel
-	}
-	if cy < emuPerPixel {
-		cy = emuPerPixel
-	}
-	return cx, cy
 }
 
 func writeWordRun(body *strings.Builder, run wordRun) {
@@ -518,7 +498,7 @@ func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, erro
 				if n, err := strconv.Atoi(attr(node, "cx")); err == nil && n > 0 {
 					if current != nil && len(current.images) > 0 && current.images[len(current.images)-1].width == 0 {
 						last := &current.images[len(current.images)-1]
-						last.width = imageWidthPercent(last.data, n)
+						last.width = imageWidthPercent(n)
 					} else {
 						pendingExtent = n
 					}
@@ -540,7 +520,7 @@ func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, erro
 					}
 					item := wordImageAt{at: len(current.runs), data: data}
 					if pendingExtent > 0 {
-						item.width = imageWidthPercent(data, pendingExtent)
+						item.width = imageWidthPercent(pendingExtent)
 						pendingExtent = 0
 					}
 					current.images = append(current.images, item)
@@ -749,10 +729,14 @@ func expandWordDrafts(drafts []wordDraft) []wordBlock {
 	blocks := make([]wordBlock, 0, len(drafts))
 	for _, draft := range drafts {
 		if draft.image != "" {
+			align := draft.align
+			if align == "justify" {
+				align = "left"
+			}
 			blocks = append(blocks, wordBlock{
 				ID:     idAt("b", len(blocks)+1),
 				Type:   "image",
-				Align:  draft.align,
+				Align:  align,
 				Indent: draft.indent,
 				Runs:   []wordRun{{}},
 				Image:  draft.image,
