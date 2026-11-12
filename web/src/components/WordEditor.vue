@@ -18,6 +18,7 @@ import {
   styleOf,
   textDiff,
 } from '../editors/text'
+import { fileToJpeg } from '../editors/image'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -41,6 +42,7 @@ const typingStyle = ref(null)
 const ui = ref(0)
 const colorInput = ref(null)
 const highlightInput = ref(null)
+const imageInput = ref(null)
 const findInput = ref(null)
 let burst = false
 let composing = false
@@ -326,7 +328,8 @@ function setType(type) {
 }
 function setAlign(value) {
   const block = props.modelValue.blocks[active.value]
-  if (!block || props.readonly || block.type === 'break' || block.type === 'image') return
+  if (!block || props.readonly || block.type === 'break') return
+  if (block.type === 'image' && value === 'justify') return
   checkpoint()
   block.align = value
   touch()
@@ -562,13 +565,7 @@ function onImageKey(index, event) {
   if (props.readonly) return
   if (event.key === 'Backspace' || event.key === 'Delete') {
     event.preventDefault()
-    checkpoint()
-    if (props.modelValue.blocks.length <= 1) {
-      props.modelValue.blocks.splice(0, 1, { id: newId(), type: 'paragraph', align: 'left', runs: emptyRuns() })
-    } else {
-      props.modelValue.blocks.splice(index, 1)
-    }
-    touch()
+    removeImage(index)
     return
   }
   if (event.key === 'Enter' && props.modelValue.blocks.length < maxWordBlocks) {
@@ -662,6 +659,89 @@ function onKey(index, event) {
       mergeBackward(index)
     }
   }
+}
+function chooseImage() {
+  if (props.readonly) return
+  imageInput.value?.click()
+  menu.value = ''
+}
+async function onInsertImage(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || props.readonly || props.modelValue.blocks.length >= maxWordBlocks) return
+  let image
+  try {
+    image = await fileToJpeg(file)
+  } catch {
+    return
+  }
+  checkpoint()
+  const at = Math.min(props.modelValue.blocks.length, Math.max(0, active.value + 1))
+  props.modelValue.blocks.splice(at, 0, {
+    id: newId(),
+    type: 'image',
+    align: 'center',
+    runs: [{ text: '' }],
+    image: image.url,
+    width: 60,
+  })
+  active.value = at
+  touch()
+}
+function applyImageWidth(value) {
+  const block = props.modelValue.blocks[active.value]
+  if (!block || block.type !== 'image' || props.readonly) return
+  const next = Math.max(20, Math.min(100, Math.round(Number(value) || 100)))
+  if (next >= 100) delete block.width
+  else block.width = next
+  touch()
+}
+function moveImage(delta) {
+  const index = active.value
+  const next = index + delta
+  const blocks = props.modelValue.blocks
+  if (blocks[index]?.type !== 'image' || next < 0 || next >= blocks.length) return
+  checkpoint()
+  const [block] = blocks.splice(index, 1)
+  blocks.splice(next, 0, block)
+  active.value = next
+  touch()
+}
+function removeImage(index) {
+  if (props.readonly) return
+  checkpoint()
+  if (props.modelValue.blocks.length <= 1) {
+    props.modelValue.blocks.splice(0, 1, { id: newId(), type: 'paragraph', align: 'left', runs: emptyRuns() })
+    active.value = 0
+  } else {
+    props.modelValue.blocks.splice(index, 1)
+    active.value = Math.max(0, index - 1)
+  }
+  touch()
+}
+function startImageResize(index, event) {
+  if (props.readonly) return
+  event.preventDefault()
+  event.stopPropagation()
+  checkpoint()
+  const block = props.modelValue.blocks[index]
+  const page = event.currentTarget.closest('.word-page')
+  const content = Math.max(1, page.clientWidth - 180)
+  const startX = event.clientX
+  const start = block.width || 100
+  const move = (ev) => {
+    const delta = ((ev.clientX - startX) / zoom.value / content) * 100
+    const next = Math.max(20, Math.min(100, Math.round(start + delta)))
+    if (next >= 100) delete block.width
+    else block.width = next
+  }
+  const up = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    touch()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
 }
 function insertBreak() {
   if (props.readonly || props.modelValue.blocks.length >= maxWordBlocks) return
@@ -842,6 +922,7 @@ watch(() => props.modelValue, refreshAll)
             <button type="button" v-for="value in ZOOMS" :key="value" @click="chooseZoom(value)">{{ value }}%</button>
           </template>
           <template v-else-if="item[0] === 'insert'">
+            <button type="button" data-testid="insert-image-menu" @click="chooseImage">图片</button>
             <button type="button" @click="insertBreak">分页符</button>
             <button type="button" @click="insertToday">日期</button>
           </template>
@@ -950,7 +1031,20 @@ watch(() => props.modelValue, refreshAll)
         <svg viewBox="0 0 24 24"><path d="M4 6h16M10 10h10M10 14h10M4 18h16M4 12h4m0 0l-2-2m2 2l-2 2" /></svg>
       </button>
       <button type="button" class="fmt s" title="删除线" :aria-pressed="markOn('strike')" @mousedown.prevent="toggle('strike')">S</button>
+      <template v-if="modelValue.blocks[active]?.type === 'image'">
+        <i class="ribbon-sep"></i>
+        <button type="button" title="图片左对齐" data-testid="image-align-left" @mousedown.prevent="setAlign('left')">左</button>
+        <button type="button" title="图片居中" data-testid="image-align-center" @mousedown.prevent="setAlign('center')">中</button>
+        <button type="button" title="图片右对齐" data-testid="image-align-right" @mousedown.prevent="setAlign('right')">右</button>
+        <label class="image-width">宽度
+          <input data-testid="image-width" type="range" min="20" max="100" :value="modelValue.blocks[active].width || 100" @pointerdown="checkpoint()" @input="applyImageWidth($event.target.value)" />
+        </label>
+        <button type="button" title="上移图片" data-testid="image-up" @mousedown.prevent="moveImage(-1)">上移</button>
+        <button type="button" title="下移图片" data-testid="image-down" @mousedown.prevent="moveImage(1)">下移</button>
+        <button type="button" title="删除图片" data-testid="image-delete" @mousedown.prevent="removeImage(active)">删除</button>
+      </template>
     </div>
+    <input ref="imageInput" class="sr-color" data-testid="insert-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" @change="onInsertImage" />
 
     <div class="word-find" v-if="findOpen">
       <input ref="findInput" data-testid="find-input" v-model="findQuery" placeholder="查找" @keydown.enter.prevent="findNext(1)" />
@@ -1002,12 +1096,16 @@ watch(() => props.modelValue, refreshAll)
                   v-else-if="block.type === 'image'"
                   class="word-image"
                   :class="{ active: active === index }"
+                  :data-align="block.align || 'left'"
                   data-testid="pdf-image"
                   tabindex="0"
                   @focus="active = index"
                   @keydown="onImageKey(index, $event)"
                 >
-                  <img :src="block.image" alt="" />
+                  <div class="frame" :style="{ width: `${block.width || 100}%` }">
+                    <img :src="block.image" alt="" />
+                    <button v-if="!readonly && active === index" type="button" class="image-grip" data-testid="image-resize" title="拖动调整宽度" @pointerdown="startImageResize(index, $event)" />
+                  </div>
                 </div>
                 <div
                   v-else

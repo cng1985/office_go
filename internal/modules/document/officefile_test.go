@@ -763,3 +763,106 @@ func largeDocx(t *testing.T, text string) []byte {
 	}
 	return buf.Bytes()
 }
+
+func TestImageLayoutRoundTrip(t *testing.T) {
+	data := jpegDataPrefix + base64.StdEncoding.EncodeToString(solidJPEG(t, color.RGBA{R: 20, G: 80, B: 200, A: 255}))
+	raw := fmt.Sprintf(`{"blocks":[
+		{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"前文"}]},
+		{"id":"b2","type":"image","align":"center","width":40,"runs":[{"text":""}],"image":%q}
+	]}`, data)
+	canonical, err := Canonical(KindWord, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Canonical(KindWord, []byte(`{"blocks":[{"id":"b1","type":"image","align":"left","width":10,"runs":[{"text":""}],"image":"`+data+`"}]}`)); err == nil {
+		t.Fatal("expected narrow image width to be rejected")
+	}
+	if _, err := Canonical(KindWord, []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","width":40,"runs":[{"text":"正文"}]}]}`)); err == nil {
+		t.Fatal("expected width on a paragraph to be rejected")
+	}
+	if _, err := Canonical(KindWord, []byte(`{"blocks":[{"id":"b1","type":"image","align":"justify","runs":[{"text":""}],"image":"`+data+`"}]}`)); err == nil {
+		t.Fatal("expected justified image to be rejected")
+	}
+	wordFile, err := ExportFile(KindWord, "排版", canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := readZip(wordFile.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(parts["word/document.xml"], []byte(`w:val="center"`)) || !bytes.Contains(parts["word/document.xml"], []byte(`cx="45720"`)) {
+		t.Fatalf("word extent = %s", parts["word/document.xml"])
+	}
+	_, _, wordAgain, err := ImportFile("排版.docx", wordFile.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wordDoc wordContent
+	if err := json.Unmarshal(wordAgain, &wordDoc); err != nil {
+		t.Fatal(err)
+	}
+	if len(wordDoc.Blocks) != 2 || wordDoc.Blocks[1].Type != "image" || wordDoc.Blocks[1].Align != "center" || wordDoc.Blocks[1].Width != 40 {
+		t.Fatalf("word layout = %+v", wordDoc.Blocks)
+	}
+
+	pdfFile, err := ExportFile(KindPDF, "排版", canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, pdfAgain, err := ImportFile("排版.pdf", pdfFile.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pdfDoc wordContent
+	if err := json.Unmarshal(pdfAgain, &pdfDoc); err != nil {
+		t.Fatal(err)
+	}
+	var pdfImage *wordBlock
+	for i := range pdfDoc.Blocks {
+		if pdfDoc.Blocks[i].Type == "image" {
+			pdfImage = &pdfDoc.Blocks[i]
+		}
+	}
+	if pdfImage == nil || pdfImage.Align != "center" || pdfImage.Width < 35 || pdfImage.Width > 45 {
+		t.Fatalf("pdf layout = %+v", pdfDoc.Blocks)
+	}
+
+	deck := fmt.Sprintf(`{"slides":[{"id":"s1","background":"#ffffff","elements":[
+		{"id":"e1","kind":"text","x":48,"y":24,"w":400,"h":48,"text":"封面","font_size":28,"color":"#202124","bold":true,"align":"left"},
+		{"id":"e2","kind":"image","x":120,"y":80,"w":400,"h":220,"text":"","font_size":18,"color":"#202124","bold":false,"align":"left","image":%q}
+	]}]}`, data)
+	pptCanonical, err := Canonical(KindPPT, []byte(deck))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Canonical(KindPPT, []byte(`{"slides":[{"id":"s1","background":"#ffffff","elements":[{"id":"e1","kind":"image","x":120,"y":80,"w":400,"h":220,"text":"说明","font_size":18,"color":"#202124","bold":false,"align":"left","image":"`+data+`"}]}]}`)); err == nil {
+		t.Fatal("expected image text to be rejected")
+	}
+	pptFile, err := ExportFile(KindPPT, "演示", pptCanonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pptParts, err := readZip(pptFile.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(pptParts["ppt/slides/slide1.xml"], []byte(`r:embed="rId2"`)) || !bytes.Contains(pptParts["ppt/slides/slide1.xml"], []byte(`name="云笺图片"`)) || len(pptParts["ppt/media/s1i1.jpeg"]) == 0 || !bytes.Contains(pptParts["ppt/slides/_rels/slide1.xml.rels"], []byte("../media/s1i1.jpeg")) || !bytes.Contains(pptParts["[Content_Types].xml"], []byte(`Extension="jpeg"`)) {
+		t.Fatalf("ppt picture missing")
+	}
+	kind, _, pptAgain, err := ImportFile("演示.pptx", pptFile.Body)
+	if err != nil || kind != KindPPT {
+		t.Fatal(err)
+	}
+	var imported pptContent
+	if err := json.Unmarshal(pptAgain, &imported); err != nil {
+		t.Fatal(err)
+	}
+	if len(imported.Slides) != 1 || len(imported.Slides[0].Elements) != 2 {
+		t.Fatalf("slides = %+v", imported.Slides)
+	}
+	picture := imported.Slides[0].Elements[1]
+	if picture.Kind != "image" || picture.X != 120 || picture.Y != 80 || picture.W != 400 || picture.H != 220 || !strings.HasPrefix(picture.Image, jpegDataPrefix) || picture.Text != "" {
+		t.Fatalf("picture = %+v", picture)
+	}
+}

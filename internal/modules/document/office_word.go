@@ -194,12 +194,41 @@ func writeWordImage(body *strings.Builder, block wordBlock, n int) {
 		return
 	}
 	cx, cy := wordImageExtent(raw)
+	if block.Width >= 20 && block.Width < 100 {
+		cx = cx * block.Width / 100
+		cy = cy * block.Width / 100
+	}
 	fmt.Fprintf(body, `<w:p><w:pPr><w:jc w:val="%s"/></w:pPr>`, wordAlignOut(block.Align))
 	fmt.Fprintf(body, `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="%d" cy="%d"/>`, cx, cy)
 	fmt.Fprintf(body, `<wp:docPr id="%d" name="Picture %d"/>`, n, n)
 	fmt.Fprintf(body, `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="%d" name="image%d.jpeg"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>`, n, n)
 	fmt.Fprintf(body, `<a:blip r:embed="rId%d"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`, n+2)
 	fmt.Fprintf(body, `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`, cx, cy)
+}
+
+func imageWidthPercent(dataURL string, cx int) int {
+	if cx <= 0 {
+		return 0
+	}
+	raw, ok := jpegPayload(dataURL)
+	if !ok {
+		return 0
+	}
+	natural, _ := wordImageExtent(raw)
+	if natural <= 0 {
+		return 0
+	}
+	percent := (cx*100 + natural/2) / natural
+	if percent >= 95 {
+		return 0
+	}
+	if percent < 20 {
+		return 20
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
 }
 
 func wordImageExtent(data []byte) (int, int) {
@@ -337,8 +366,9 @@ func importDocx(filename string, body []byte) (string, string, []byte, error) {
 }
 
 type wordImageAt struct {
-	at   int
-	data string
+	at    int
+	data  string
+	width int
 }
 
 type wordDraft struct {
@@ -348,6 +378,7 @@ type wordDraft struct {
 	runs      []wordRun
 	pageBreak bool
 	image     string
+	width     int
 	images    []wordImageAt
 }
 
@@ -356,22 +387,7 @@ func wordImageParts(files map[string][]byte) map[string]string {
 }
 
 func imagePartsFromRels(files map[string][]byte, rels []byte) map[string]string {
-	if len(rels) == 0 {
-		return nil
-	}
-	images := map[string]string{}
-	_ = walkXML(rels, func(token xml.Token) error {
-		start, ok := token.(xml.StartElement)
-		if !ok || start.Name.Local != "Relationship" {
-			return nil
-		}
-		id := attr(start, "Id")
-		if data, ok := wordImageURL(files, attr(start, "Target"), attr(start, "Type"), attr(start, "TargetMode")); ok {
-			images[id] = data
-		}
-		return nil
-	})
-	return images
+	return imagePartsIn(files, rels, "word")
 }
 
 func wordPartImages(files map[string][]byte, relType string) []wordBlock {
@@ -417,7 +433,26 @@ func wordPartPath(target string) string {
 	return name
 }
 
-func wordImageURL(files map[string][]byte, target, typ, mode string) (string, bool) {
+func imagePartsIn(files map[string][]byte, rels []byte, base string) map[string]string {
+	if len(rels) == 0 {
+		return nil
+	}
+	images := map[string]string{}
+	_ = walkXML(rels, func(token xml.Token) error {
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "Relationship" {
+			return nil
+		}
+		id := attr(start, "Id")
+		if data, ok := wordImageURL(files, base, attr(start, "Target"), attr(start, "Type"), attr(start, "TargetMode")); ok {
+			images[id] = data
+		}
+		return nil
+	})
+	return images
+}
+
+func wordImageURL(files map[string][]byte, base, target, typ, mode string) (string, bool) {
 	if !strings.HasSuffix(typ, "/image") || strings.EqualFold(mode, "External") {
 		return "", false
 	}
@@ -432,7 +467,7 @@ func wordImageURL(files map[string][]byte, target, typ, mode string) (string, bo
 	if strings.HasPrefix(target, "/") {
 		name = strings.TrimPrefix(path.Clean(target), "/")
 	} else {
-		name = path.Clean(path.Join("word", target))
+		name = path.Clean(path.Join(base, target))
 	}
 	if name == "." || strings.Contains(name, "..") {
 		return "", false
@@ -458,6 +493,7 @@ func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, erro
 	inRunProps := 0
 	readingText := false
 	fallback := 0
+	pendingExtent := 0
 	err := walkXML(data, func(token xml.Token) error {
 		switch node := token.(type) {
 		case xml.StartElement:
@@ -477,6 +513,16 @@ func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, erro
 					drafts = append(drafts, *current)
 				}
 				current = &wordDraft{kind: "paragraph", align: "left"}
+				pendingExtent = 0
+			case "extent", "ext":
+				if n, err := strconv.Atoi(attr(node, "cx")); err == nil && n > 0 {
+					if current != nil && len(current.images) > 0 && current.images[len(current.images)-1].width == 0 {
+						last := &current.images[len(current.images)-1]
+						last.width = imageWidthPercent(last.data, n)
+					} else {
+						pendingExtent = n
+					}
+				}
 			case "blip", "imagedata":
 				if current == nil {
 					current = &wordDraft{kind: "paragraph", align: "left"}
@@ -492,7 +538,12 @@ func parseWordDocument(data []byte, images map[string]string) ([]wordBlock, erro
 						current.runs = append(current.runs, flushed)
 						text.Reset()
 					}
-					current.images = append(current.images, wordImageAt{at: len(current.runs), data: data})
+					item := wordImageAt{at: len(current.runs), data: data}
+					if pendingExtent > 0 {
+						item.width = imageWidthPercent(data, pendingExtent)
+						pendingExtent = 0
+					}
+					current.images = append(current.images, item)
 				}
 			case "pStyle":
 				if current != nil {
@@ -668,7 +719,7 @@ func splitDraftOnImages(draft wordDraft) []wordDraft {
 	for i, run := range draft.runs {
 		for next < len(draft.images) && draft.images[next].at <= i {
 			flushRuns()
-			out = append(out, wordDraft{kind: "paragraph", align: draft.align, indent: draft.indent, image: draft.images[next].data})
+			out = append(out, wordDraft{kind: "paragraph", align: draft.align, indent: draft.indent, image: draft.images[next].data, width: draft.images[next].width})
 			next++
 		}
 		if run.Text == "" {
@@ -679,7 +730,7 @@ func splitDraftOnImages(draft wordDraft) []wordDraft {
 	}
 	for next < len(draft.images) {
 		flushRuns()
-		out = append(out, wordDraft{kind: "paragraph", align: draft.align, indent: draft.indent, image: draft.images[next].data})
+		out = append(out, wordDraft{kind: "paragraph", align: draft.align, indent: draft.indent, image: draft.images[next].data, width: draft.images[next].width})
 		next++
 	}
 	flushRuns()
@@ -705,6 +756,7 @@ func expandWordDrafts(drafts []wordDraft) []wordBlock {
 				Indent: draft.indent,
 				Runs:   []wordRun{{}},
 				Image:  draft.image,
+				Width:  draft.width,
 			})
 			continue
 		}

@@ -381,9 +381,31 @@ func blockFromPDFImage(image pdfPlacedImage) (wordBlock, bool) {
 	if len(image.data) == 0 {
 		return wordBlock{}, false
 	}
+	maxW := pdfPageW - pdfMargin*2
+	percent := 0
+	align := "left"
+	if maxW > 0 && image.w > 0 {
+		percent = int(math.Round(image.w / maxW * 100))
+		if percent >= 95 {
+			percent = 0
+		} else if percent < 20 {
+			percent = 20
+		} else if percent > 100 {
+			percent = 100
+		}
+		leftGap := image.x - pdfMargin
+		rightGap := pdfMargin + maxW - (image.x + image.w)
+		switch {
+		case leftGap > 12 && rightGap > 12 && math.Abs(leftGap-rightGap) < 18:
+			align = "center"
+		case leftGap > rightGap+18:
+			align = "right"
+		}
+	}
 	return wordBlock{
 		Type:  "image",
-		Align: "left",
+		Align: align,
+		Width: percent,
 		Runs:  []wordRun{{}},
 		Image: jpegDataPrefix + base64.StdEncoding.EncodeToString(image.data),
 	}, true
