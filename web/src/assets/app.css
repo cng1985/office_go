@@ -969,10 +969,13 @@ button.tree-row { border: 0; background: transparent; text-align: left; padding:
   .library-bar { align-items: stretch; flex-wrap: wrap; }
   .library-frame { flex-direction: column; min-height: 0; }
   .library-side { width: 100%; min-height: 0; border-right: 0; border-bottom: 1px solid #e0e0e0; }
-  .library-home .library-side { height: auto; max-height: 240px; }
-  .library-home .folder-tree { max-height: none; }
+  .library-home .library-frame { overflow-x: hidden; overflow-y: auto; }
+  .library-home .library-side { height: auto; max-height: none; flex: none; overflow: hidden; }
+  .library-home .folder-tree { flex: none; max-height: min(240px, 42dvh); overflow-x: hidden; overflow-y: auto; }
+  .library-home .library { height: auto; overflow: visible; flex: none; }
+  .library-home .library-scroll { overflow: visible; flex: none; }
   .library-intro { padding: 20px 16px 16px; }
-  .library-home .library-bar { padding-left: 16px; padding-right: 16px; }
+  .library-home .library-bar { top: 0; padding-left: 16px; padding-right: 16px; }
   .library-scroll > .error,
   .library-scroll > .doc-list,
   .library-scroll > .doc-grid,
