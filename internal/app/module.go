@@ -4,6 +4,7 @@ import (
 	"go.uber.org/fx"
 
 	"yunjian/internal/modules/account"
+	"yunjian/internal/modules/calendar"
 	"yunjian/internal/modules/document"
 	"yunjian/internal/platform/database"
 	"yunjian/internal/platform/middleware"
@@ -18,6 +19,7 @@ var Module = fx.Options(
 	server.Module,
 	account.Module,
 	document.Module,
+	calendar.Module,
 	web.Module,
 	fx.Invoke(bootstrap),
 )

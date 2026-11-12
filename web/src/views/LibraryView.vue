@@ -555,7 +555,10 @@ onMounted(() => {
           </template>
         </div>
       </div>
-      <router-link class="tree-manage" to="/teams" data-testid="manage-teams">团队管理</router-link>
+      <nav class="library-links" aria-label="更多">
+        <router-link class="tree-manage" to="/calendar" data-testid="open-calendar">日历</router-link>
+        <router-link class="tree-manage" to="/teams" data-testid="manage-teams">团队管理</router-link>
+      </nav>
       </aside>
       <main class="library">
       <h1>新建</h1>
