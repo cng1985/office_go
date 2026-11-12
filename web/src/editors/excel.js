@@ -41,6 +41,10 @@ export function normalizeWorkbook(content) {
 
 const cellIndexes = new WeakMap()
 
+function dropCellIndex(sheet) {
+  if (sheet?.cells) cellIndexes.delete(sheet.cells)
+}
+
 export function findCell(sheet, row, col) {
   const cells = sheet?.cells
   if (!cells) return null
@@ -56,8 +60,10 @@ export function findCell(sheet, row, col) {
 export function rowWindow({ rowCount, scrollTop, viewHeight, rowHeight = 21, buffer = 6, merges = [] }) {
   const total = Math.max(1, rowCount || 1)
   const height = rowHeight > 0 ? rowHeight : 21
-  const first = Math.max(1, Math.floor(Math.max(0, scrollTop) / height) + 1 - buffer)
   const span = Math.max(1, Math.ceil(Math.max(height, viewHeight) / height) + buffer * 2)
+  const maxScroll = Math.max(0, total * height - Math.max(height, viewHeight))
+  const scrolled = Math.min(Math.max(0, scrollTop), maxScroll)
+  const first = Math.min(total, Math.max(1, Math.floor(scrolled / height) + 1 - buffer))
   let start = first
   let end = Math.min(total, first + span - 1)
   const anchors = []
@@ -136,6 +142,7 @@ export function insertRows(sheet, at, count = 1, workbook = null) {
     cell.input = shiftStructural(cell.input, 'row', at, count, sheet.name, false, 'insert')
   }
   syncQualifiedRefs(workbook, sheet, 'row', at, count, 'insert')
+  dropCellIndex(sheet)
   return true
 }
 
@@ -149,6 +156,7 @@ export function deleteRows(sheet, at, count = 1, workbook = null) {
   }
   sheet.row_count -= count
   syncQualifiedRefs(workbook, sheet, 'row', at, count, 'delete')
+  dropCellIndex(sheet)
   return true
 }
 
@@ -167,6 +175,7 @@ export function insertCols(sheet, at, count = 1, workbook = null) {
     cell.input = shiftStructural(cell.input, 'col', at, count, sheet.name, false, 'insert')
   }
   syncQualifiedRefs(workbook, sheet, 'col', at, count, 'insert')
+  dropCellIndex(sheet)
   return true
 }
 
@@ -186,6 +195,7 @@ export function deleteCols(sheet, at, count = 1, workbook = null) {
   }
   sheet.col_count -= count
   syncQualifiedRefs(workbook, sheet, 'col', at, count, 'delete')
+  dropCellIndex(sheet)
   return true
 }
 
