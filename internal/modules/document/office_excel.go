@@ -769,20 +769,20 @@ func validFormulaRef(ref formulaRef) bool {
 	if !ref.hasCol && !ref.hasRow {
 		return false
 	}
-	if ref.hasCol && (ref.col < 1 || ref.col > 30) {
+	if ref.hasCol && (ref.col < 1 || ref.col > maxExcelCols) {
 		return false
 	}
-	if ref.hasRow && (ref.row < 1 || ref.row > 120) {
+	if ref.hasRow && (ref.row < 1 || ref.row > maxExcelRows) {
 		return false
 	}
 	return true
 }
 
 func formulaRefBroken(ref formulaRef) bool {
-	if ref.hasCol && (ref.col < 1 || ref.col > 30) {
+	if ref.hasCol && (ref.col < 1 || ref.col > maxExcelCols) {
 		return true
 	}
-	if ref.hasRow && (ref.row < 1 || ref.row > 120) {
+	if ref.hasRow && (ref.row < 1 || ref.row > maxExcelRows) {
 		return true
 	}
 	return false
@@ -913,8 +913,8 @@ func sheetFromCells(order [][2]int, cells map[[2]int]sheetCell) (*excelSheet, er
 		}
 		kept = append(kept, cell)
 	}
-	if maxRow > 120 || maxCol > 30 {
-		return nil, apperrors.BadRequest(400, "表格超过 120 行或 30 列，无法导入")
+	if maxRow > maxExcelRows || maxCol > maxExcelCols {
+		return nil, apperrors.BadRequest(400, fmt.Sprintf("表格超过 %d 行或 %d 列，无法导入", maxExcelRows, maxExcelCols))
 	}
 	rowCount := maxRow
 	if rowCount < 50 {
@@ -1022,8 +1022,8 @@ func importCSV(filename string, body []byte) (string, string, []byte, error) {
 			cells = append(cells, excelCell{Row: r + 1, Col: c + 1, Input: value})
 		}
 	}
-	if len(records) > 120 || maxCol > 30 {
-		return "", "", nil, apperrors.BadRequest(400, "表格超过 120 行或 30 列，无法导入")
+	if len(records) > maxExcelRows || maxCol > maxExcelCols {
+		return "", "", nil, apperrors.BadRequest(400, fmt.Sprintf("表格超过 %d 行或 %d 列，无法导入", maxExcelRows, maxExcelCols))
 	}
 	rowCount := len(records)
 	if rowCount < 50 {

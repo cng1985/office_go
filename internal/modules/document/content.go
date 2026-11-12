@@ -17,6 +17,8 @@ import (
 const (
 	maxContentBytes = 1 << 20
 	maxWordBlocks   = 4000
+	maxExcelRows    = 1000
+	maxExcelCols    = 100
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
@@ -350,7 +352,7 @@ func validateSheet(sheet *excelSheet, names map[string]struct{}) error {
 		return apperrors.BadRequest(400, "工作表名称重复")
 	}
 	names[strings.ToLower(sheet.Name)] = struct{}{}
-	if sheet.RowCount < 1 || sheet.RowCount > 120 || sheet.ColCount < 1 || sheet.ColCount > 30 {
+	if sheet.RowCount < 1 || sheet.RowCount > maxExcelRows || sheet.ColCount < 1 || sheet.ColCount > maxExcelCols {
 		return apperrors.BadRequest(400, "表格行列范围无效")
 	}
 	if err := validateWidths(sheet); err != nil {
