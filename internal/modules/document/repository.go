@@ -26,6 +26,7 @@ func NewRepository(db *gorm.DB) *Repository {
 
 type detailRow struct {
 	ID        int64
+	FolderID  *int64
 	Kind      string
 	Title     string
 	Revision  int64
@@ -44,14 +45,14 @@ func (r *Repository) Create(ctx context.Context, request *DocumentCreateRequest)
 	if err != nil {
 		return zero, err
 	}
-	return r.insertNew(ctx, request.Kind, request.Title, content, "创建文档")
+	return r.insertNew(ctx, request.Kind, request.Title, request.FolderID, content, "创建文档")
 }
 
-func (r *Repository) Import(ctx context.Context, kind, title string, content []byte) (response.Response[DocumentResponse], error) {
-	return r.insertNew(ctx, kind, title, content, "上传文件")
+func (r *Repository) Import(ctx context.Context, kind, title string, folderID int64, content []byte) (response.Response[DocumentResponse], error) {
+	return r.insertNew(ctx, kind, title, folderID, content, "上传文件")
 }
 
-func (r *Repository) insertNew(ctx context.Context, kind, title string, content []byte, note string) (response.Response[DocumentResponse], error) {
+func (r *Repository) insertNew(ctx context.Context, kind, title string, folderID int64, content []byte, note string) (response.Response[DocumentResponse], error) {
 	var result response.Response[DocumentResponse]
 	scope, err := requireScope(ctx)
 	if err != nil {
@@ -59,6 +60,9 @@ func (r *Repository) insertNew(ctx context.Context, kind, title string, content 
 	}
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now().UTC()
+		if err := ensureFolder(tx, scope.ActorID, folderID); err != nil {
+			return err
+		}
 		entity := &Document{
 			OwnerID:   scope.ActorID,
 			Kind:      kind,
@@ -66,6 +70,9 @@ func (r *Repository) insertNew(ctx context.Context, kind, title string, content 
 			Revision:  1,
 			CreatedAt: now,
 			UpdatedAt: now,
+		}
+		if folderID != 0 {
+			entity.FolderID = &folderID
 		}
 		if err := tx.Omit(clause.Associations).Create(entity).Error; err != nil {
 			return mapWriteError(err)
@@ -162,6 +169,13 @@ func (r *Repository) Search(ctx context.Context, search *DocumentSearch) (respon
 		if search.Title != "" {
 			query = query.Where("d.title LIKE ? ESCAPE ?", likeContains(search.Title), `\`)
 		}
+		if search.FolderID != nil {
+			if *search.FolderID == 0 {
+				query = query.Where("d.folder_id IS NULL")
+			} else {
+				query = query.Where("d.folder_id = ?", *search.FolderID)
+			}
+		}
 		return query
 	}
 	var total int64
@@ -171,7 +185,7 @@ func (r *Repository) Search(ctx context.Context, search *DocumentSearch) (respon
 	rows := make([]detailRow, 0)
 	offset := (page - 1) * pageSize
 	err = filtered().
-		Select("d.id, d.kind, d.title, d.revision, d.updated_at, v.version_no").
+		Select("d.id, d.folder_id, d.kind, d.title, d.revision, d.updated_at, v.version_no").
 		Joins("JOIN office_document_version AS v ON v.id = d.current_version_id").
 		Order(column + " " + direction + ", d.id DESC").
 		Offset(offset).Limit(pageSize).
@@ -455,7 +469,7 @@ func loadOwned(tx *gorm.DB, id, ownerID int64) (*Document, error) {
 func loadDetail(tx *gorm.DB, id, ownerID int64) (*detailRow, error) {
 	var row detailRow
 	err := tx.Table("office_document AS d").
-		Select("d.id, d.kind, d.title, d.revision, d.created_at, d.updated_at, v.id AS version_id, v.version_no, v.content, v.byte_size, v.note").
+		Select("d.id, d.folder_id, d.kind, d.title, d.revision, d.created_at, d.updated_at, v.id AS version_id, v.version_no, v.content, v.byte_size, v.note").
 		Joins("JOIN office_document_version AS v ON v.id = d.current_version_id").
 		Where("d.id = ? AND d.owner_id = ?", id, ownerID).
 		Take(&row).Error

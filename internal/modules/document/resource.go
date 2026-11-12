@@ -34,6 +34,9 @@ func (r *Resource) Create(ctx context.Context, request *DocumentCreateRequest) (
 	if err != nil {
 		return zero, err
 	}
+	if request.FolderID < 0 {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
 	request.Title = title
 	return r.repo.Create(ctx, request)
 }
@@ -79,6 +82,9 @@ func (r *Resource) Search(ctx context.Context, search *DocumentSearch) (response
 	}
 	if search.Kind != "" && !validKind(search.Kind) {
 		return zero, apperrors.BadRequest(400, "文档类型无效")
+	}
+	if search.FolderID != nil && *search.FolderID < 0 {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
 	}
 	page, pageSize, err := normalizePage(search.Page, search.PageSize)
 	if err != nil {
@@ -201,7 +207,102 @@ func (r *Resource) Import(ctx context.Context, request *DocumentImportRequest) (
 	if err != nil {
 		return zero, err
 	}
-	return r.repo.Import(ctx, kind, title, content)
+	if request.FolderID < 0 {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	return r.repo.Import(ctx, kind, title, request.FolderID, content)
+}
+
+func (r *Resource) Move(ctx context.Context, request *DocumentMoveRequest) (response.Response[DocumentResponse], error) {
+	var zero response.Response[DocumentResponse]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	if err := requireID(request.ID); err != nil {
+		return zero, err
+	}
+	if err := requireRevision(request.Revision); err != nil {
+		return zero, err
+	}
+	if request.FolderID < 0 {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	return r.repo.Move(ctx, request)
+}
+
+func (r *Resource) CreateFolder(ctx context.Context, request *FolderCreateRequest) (response.Response[FolderDetail], error) {
+	var zero response.Response[FolderDetail]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	if request.ParentID < 0 {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	name, err := normalizeFolderName(request.Name)
+	if err != nil {
+		return zero, err
+	}
+	request.Name = name
+	return r.repo.CreateFolder(ctx, request)
+}
+
+func (r *Resource) UpdateFolder(ctx context.Context, request *FolderUpdateRequest) (response.Response[FolderDetail], error) {
+	var zero response.Response[FolderDetail]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	if err := requireID(request.ID); err != nil {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	name, err := normalizeFolderName(request.Name)
+	if err != nil {
+		return zero, err
+	}
+	request.Name = name
+	return r.repo.UpdateFolder(ctx, request)
+}
+
+func (r *Resource) DeleteFolder(ctx context.Context, request *FolderIDRequest) (response.Response[FolderSimple], error) {
+	var zero response.Response[FolderSimple]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	if err := requireID(request.ID); err != nil {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	return r.repo.DeleteFolder(ctx, request)
+}
+
+func (r *Resource) FolderOne(ctx context.Context, request *FolderIDRequest) (response.Response[FolderDetail], error) {
+	var zero response.Response[FolderDetail]
+	if request == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	if err := requireID(request.ID); err != nil {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	return r.repo.FolderOne(ctx, request)
+}
+
+func (r *Resource) SearchFolders(ctx context.Context, search *FolderSearch) (response.PageResponse[FolderSimple], error) {
+	var zero response.PageResponse[FolderSimple]
+	if search == nil {
+		return zero, apperrors.BadRequest(400, "请求格式不正确")
+	}
+	search.Name = trimSpace(search.Name)
+	if utf8.RuneCountInString(search.Name) > 80 {
+		return zero, apperrors.BadRequest(400, "搜索词过长")
+	}
+	if search.ParentID != nil && *search.ParentID < 0 {
+		return zero, apperrors.BadRequest(400, "文件夹不存在")
+	}
+	page, pageSize, err := normalizePage(search.Page, search.PageSize)
+	if err != nil {
+		return zero, err
+	}
+	search.Page = page
+	search.PageSize = pageSize
+	return r.repo.SearchFolders(ctx, search)
 }
 
 func (r *Resource) Export(ctx context.Context, request *DocumentExportRequest) (response.Response[DocumentFile], error) {

@@ -1,3 +1,5 @@
+export const maxWordBlocks = 4000
+
 export function plainText(runs) {
   return (runs || []).map((run) => run.text || '').join('')
 }

@@ -3,6 +3,7 @@ package document
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -200,6 +201,83 @@ func TestContentRejectsUnknownShape(t *testing.T) {
 	_, err := Canonical(KindWord, []byte(`{"blocks":[]}`))
 	if !errors.As(err, &appErr) || appErr.Code != 400 {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFoldersKeepDocumentsTogether(t *testing.T) {
+	db := openDB(t)
+	owner := scopeOf(t, db, "librarian")
+	other := scopeOf(t, db, "visitor")
+	resource := NewResource(NewRepository(db))
+	root, err := resource.CreateFolder(owner, &FolderCreateRequest{Name: "  项目资料  "})
+	if err != nil || root.Data.Name != "项目资料" || len(root.Data.Ancestors) != 0 {
+		t.Fatalf("folder = %+v err=%v", root.Data, err)
+	}
+	child, err := resource.CreateFolder(owner, &FolderCreateRequest{ParentID: root.Data.ID, Name: "合同"})
+	if err != nil || len(child.Data.Ancestors) != 1 || child.Data.Ancestors[0].ID != root.Data.ID {
+		t.Fatalf("child = %+v err=%v", child.Data, err)
+	}
+	if _, err := resource.CreateFolder(owner, &FolderCreateRequest{Name: "项目资料"}); err == nil {
+		t.Fatal("duplicate folder name should be rejected")
+	}
+	if _, err := resource.FolderOne(other, &FolderIDRequest{ID: root.Data.ID}); err == nil {
+		t.Fatal("other user should not read the folder")
+	}
+	created, err := resource.Create(owner, &DocumentCreateRequest{Kind: KindWord, Title: "纪要", FolderID: child.Data.ID})
+	if err != nil || created.Data.FolderID != child.Data.ID {
+		t.Fatalf("created = %+v err=%v", created.Data, err)
+	}
+	rootID := int64(0)
+	atRoot, err := resource.Search(owner, &DocumentSearch{FolderID: &rootID})
+	if err != nil || atRoot.Total != 0 {
+		t.Fatalf("root docs = %+v err=%v", atRoot, err)
+	}
+	inside, err := resource.Search(owner, &DocumentSearch{FolderID: &child.Data.ID})
+	if err != nil || inside.Total != 1 || inside.Data[0].Title != "纪要" {
+		t.Fatalf("folder docs = %+v err=%v", inside, err)
+	}
+	if _, err := resource.DeleteFolder(owner, &FolderIDRequest{ID: child.Data.ID}); err == nil {
+		t.Fatal("folder with a document should stay")
+	}
+	moved, err := resource.Move(owner, &DocumentMoveRequest{ID: created.Data.ID, Revision: created.Data.Revision, FolderID: root.Data.ID})
+	if err != nil || moved.Data.FolderID != root.Data.ID || moved.Data.Revision != created.Data.Revision+1 {
+		t.Fatalf("move = %+v err=%v", moved.Data, err)
+	}
+	if _, err := resource.Move(other, &DocumentMoveRequest{ID: created.Data.ID, Revision: moved.Data.Revision, FolderID: root.Data.ID}); err == nil {
+		t.Fatal("other user should not move the document")
+	}
+	if _, err := resource.DeleteFolder(owner, &FolderIDRequest{ID: child.Data.ID}); err != nil {
+		t.Fatal(err)
+	}
+	home, err := resource.Move(owner, &DocumentMoveRequest{ID: created.Data.ID, Revision: moved.Data.Revision, FolderID: 0})
+	if err != nil || home.Data.FolderID != 0 {
+		t.Fatalf("move home = %+v err=%v", home.Data, err)
+	}
+	back, err := resource.Search(owner, &DocumentSearch{FolderID: &rootID})
+	if err != nil || back.Total != 1 || back.Data[0].ID != created.Data.ID {
+		t.Fatalf("root after move = %+v err=%v", back, err)
+	}
+	renamed, err := resource.UpdateFolder(owner, &FolderUpdateRequest{ID: root.Data.ID, Name: "归档"})
+	if err != nil || renamed.Data.Name != "归档" {
+		t.Fatalf("rename = %+v err=%v", renamed.Data, err)
+	}
+	listed, err := resource.SearchFolders(owner, &FolderSearch{ParentID: &rootID})
+	if err != nil || listed.Total != 1 || listed.Data[0].Name != "归档" {
+		t.Fatalf("folders = %+v err=%v", listed, err)
+	}
+}
+
+func TestFolderIDFilterDecodesZero(t *testing.T) {
+	var search DocumentSearch
+	if err := json.Unmarshal([]byte(`{"folder_id":"0","title":"纪要"}`), &search); err != nil {
+		t.Fatal(err)
+	}
+	if search.FolderID == nil || *search.FolderID != 0 || search.Title != "纪要" {
+		t.Fatalf("search = %+v", search)
+	}
+	var all DocumentSearch
+	if err := json.Unmarshal([]byte(`{"title":"纪要"}`), &all); err != nil || all.FolderID != nil {
+		t.Fatalf("all = %+v err=%v", all, err)
 	}
 }
 

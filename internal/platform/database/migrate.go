@@ -12,15 +12,20 @@ import (
 	"yunjian/migrations"
 )
 
-const migrationVersion = "0001_init"
+// migrationVersions 按顺序执行。已记录的版本会跳过，方便已有数据库补上后续变更。
+var migrationVersions = []string{"0001_init", "0002_folder"}
+
+type migrationStep struct {
+	version string
+	script  string
+}
 
 // Migrate 执行尚未记录的迁移。重复调用不会重放已完成版本。
 func Migrate(ctx context.Context, db *gorm.DB, driver string) error {
 	normalized := NormalizeDriver(driver)
-	scriptName := "0001_init." + normalized + ".sql"
-	payload, err := migrations.Files.ReadFile(scriptName)
+	steps, err := loadMigrations(normalized)
 	if err != nil {
-		return fmt.Errorf("缺少迁移脚本 %s", scriptName)
+		return err
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -31,29 +36,42 @@ func Migrate(ctx context.Context, db *gorm.DB, driver string) error {
 		return err
 	}
 	defer conn.Close()
-	return migrateOnConn(ctx, conn, normalized, string(payload))
+	return migrateOnConn(ctx, conn, normalized, steps)
 }
 
-func migrateOnConn(ctx context.Context, conn *sql.Conn, driver, script string) error {
+func loadMigrations(driver string) ([]migrationStep, error) {
+	steps := make([]migrationStep, 0, len(migrationVersions))
+	for _, version := range migrationVersions {
+		name := version + "." + driver + ".sql"
+		payload, err := migrations.Files.ReadFile(name)
+		if err != nil {
+			return nil, fmt.Errorf("缺少迁移脚本 %s", name)
+		}
+		steps = append(steps, migrationStep{version: version, script: string(payload)})
+	}
+	return steps, nil
+}
+
+func migrateOnConn(ctx context.Context, conn *sql.Conn, driver string, steps []migrationStep) error {
 	switch driver {
 	case "sqlite":
-		return migrateSQLite(ctx, conn, script)
+		return migrateSQLite(ctx, conn, steps)
 	case "mysql":
-		return migrateLocked(ctx, conn, script, driver, lockMySQL, unlockMySQL)
+		return migrateLocked(ctx, conn, steps, driver, lockMySQL, unlockMySQL)
 	case "postgres":
-		return migrateLocked(ctx, conn, script, driver, lockPostgres, unlockPostgres)
+		return migrateLocked(ctx, conn, steps, driver, lockPostgres, unlockPostgres)
 	case "sqlserver":
-		return migrateLocked(ctx, conn, script, driver, lockSQLServer, unlockSQLServer)
+		return migrateLocked(ctx, conn, steps, driver, lockSQLServer, unlockSQLServer)
 	default:
 		return fmt.Errorf("未知 database.driver %s", driver)
 	}
 }
 
-func migrateSQLite(ctx context.Context, conn *sql.Conn, script string) error {
+func migrateSQLite(ctx context.Context, conn *sql.Conn, steps []migrationStep) error {
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return fmt.Errorf("开始迁移事务失败: %w", err)
 	}
-	if err := applyScript(ctx, conn, "sqlite", script); err != nil {
+	if err := applyPending(ctx, conn, "sqlite", steps); err != nil {
 		_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 		return err
 	}
@@ -66,13 +84,13 @@ func migrateSQLite(ctx context.Context, conn *sql.Conn, script string) error {
 
 type lockFunc func(context.Context, *sql.Conn) error
 
-func migrateLocked(ctx context.Context, conn *sql.Conn, script, driver string, lock, unlock lockFunc) error {
+func migrateLocked(ctx context.Context, conn *sql.Conn, steps []migrationStep, driver string, lock, unlock lockFunc) error {
 	if err := lock(ctx, conn); err != nil {
 		return err
 	}
 	defer unlock(context.Background(), conn)
 	if driver == "mysql" {
-		return applyScript(ctx, conn, driver, script)
+		return applyPending(ctx, conn, driver, steps)
 	}
 	begin := "BEGIN"
 	if driver == "sqlserver" {
@@ -81,7 +99,7 @@ func migrateLocked(ctx context.Context, conn *sql.Conn, script, driver string, l
 	if _, err := conn.ExecContext(ctx, begin); err != nil {
 		return err
 	}
-	if err := applyScript(ctx, conn, driver, script); err != nil {
+	if err := applyPending(ctx, conn, driver, steps); err != nil {
 		_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 		return err
 	}
@@ -92,27 +110,29 @@ func migrateLocked(ctx context.Context, conn *sql.Conn, script, driver string, l
 	return nil
 }
 
-func applyScript(ctx context.Context, conn *sql.Conn, driver, script string) error {
+func applyPending(ctx context.Context, conn *sql.Conn, driver string, steps []migrationStep) error {
 	if _, err := conn.ExecContext(ctx, schemaTableSQL(driver)); err != nil {
 		return fmt.Errorf("创建迁移记录表失败: %w", err)
 	}
-	var version string
 	query := "SELECT version FROM schema_migrations WHERE version = " + placeholder(driver, 1)
-	err := conn.QueryRowContext(ctx, query, migrationVersion).Scan(&version)
-	if err == nil {
-		return nil
-	}
-	if err != sql.ErrNoRows {
-		return err
-	}
-	for _, stmt := range splitSQL(script) {
-		if _, err := conn.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("执行迁移 %s 失败: %w", migrationVersion, err)
-		}
-	}
 	insert := "INSERT INTO schema_migrations (version, applied_at) VALUES (" + placeholder(driver, 1) + ", " + placeholder(driver, 2) + ")"
-	if _, err := conn.ExecContext(ctx, insert, migrationVersion, time.Now().UTC()); err != nil {
-		return fmt.Errorf("记录迁移版本失败: %w", err)
+	for _, step := range steps {
+		var version string
+		err := conn.QueryRowContext(ctx, query, step.version).Scan(&version)
+		if err == nil {
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+		for _, stmt := range splitSQL(step.script) {
+			if _, err := conn.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("执行迁移 %s 失败: %w", step.version, err)
+			}
+		}
+		if _, err := conn.ExecContext(ctx, insert, step.version, time.Now().UTC()); err != nil {
+			return fmt.Errorf("记录迁移版本失败: %w", err)
+		}
 	}
 	return nil
 }

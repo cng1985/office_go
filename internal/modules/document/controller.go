@@ -29,6 +29,12 @@ func (c *Controller) RegisterProtected(group *gin.RouterGroup) {
 	group.POST("/document/version/restore", c.restore)
 	group.POST("/document/import", c.importFile)
 	group.POST("/document/export", c.exportFile)
+	group.POST("/document/move", c.move)
+	group.POST("/document/folder/create", c.folderCreate)
+	group.POST("/document/folder/update", c.folderUpdate)
+	group.POST("/document/folder/delete", c.folderDelete)
+	group.POST("/document/folder/one", c.folderOne)
+	group.POST("/document/folder/search", c.folderSearch)
 }
 
 func (c *Controller) create(ctx *gin.Context) {
@@ -169,6 +175,90 @@ func (c *Controller) exportFile(ctx *gin.Context) {
 		return
 	}
 	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) move(ctx *gin.Context) {
+	var request DocumentMoveRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.Move(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) folderCreate(ctx *gin.Context) {
+	var request FolderCreateRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.CreateFolder(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) folderUpdate(ctx *gin.Context) {
+	var request FolderUpdateRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.UpdateFolder(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) folderDelete(ctx *gin.Context) {
+	var request FolderIDRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.DeleteFolder(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) folderOne(ctx *gin.Context) {
+	var request FolderIDRequest
+	if err := response.BindJSON(ctx, &request); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.FolderOne(ctx.Request.Context(), &request)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessResponse(ctx, result)
+}
+
+func (c *Controller) folderSearch(ctx *gin.Context) {
+	var search FolderSearch
+	if err := response.BindJSON(ctx, &search); err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	result, err := c.resource.SearchFolders(ctx.Request.Context(), &search)
+	if err != nil {
+		response.HandleError(ctx, err)
+		return
+	}
+	response.SuccessPage(ctx, result)
 }
 
 func (c *Controller) restore(ctx *gin.Context) {

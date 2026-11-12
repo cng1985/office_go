@@ -146,7 +146,7 @@ func importText(filename string, body []byte) (string, string, []byte, error) {
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
-	if len(lines) > 400 {
+	if len(lines) > maxWordBlocks {
 		return "", "", nil, apperrors.BadRequest(400, "文稿段落过多，无法导入")
 	}
 	blocks := make([]wordBlock, 0, len(lines))

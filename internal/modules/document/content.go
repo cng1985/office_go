@@ -14,7 +14,10 @@ import (
 	apperrors "yunjian/internal/platform/errors"
 )
 
-const maxContentBytes = 1 << 20
+const (
+	maxContentBytes = 1 << 20
+	maxWordBlocks   = 4000
+)
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 var colorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -202,7 +205,7 @@ func marshalContent(value any) ([]byte, error) {
 }
 
 func validateWord(content *wordContent) error {
-	if len(content.Blocks) < 1 || len(content.Blocks) > 400 {
+	if len(content.Blocks) < 1 || len(content.Blocks) > maxWordBlocks {
 		return apperrors.BadRequest(400, "文稿段落数量无效")
 	}
 	seen := map[string]struct{}{}
