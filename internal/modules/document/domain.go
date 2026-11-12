@@ -15,9 +15,10 @@ const (
 
 // DocumentCreateRequest 创建空文档。客户端不能指定主键和正文。
 type DocumentCreateRequest struct {
-	ID    int64  `json:"id,string"`
-	Kind  string `json:"kind"`
-	Title string `json:"title"`
+	ID       int64  `json:"id,string"`
+	FolderID int64  `json:"folder_id,string,omitempty"`
+	Kind     string `json:"kind"`
+	Title    string `json:"title"`
 }
 
 // DocumentUpdateRequest 只修改标题，不产生内容版本。
@@ -32,12 +33,45 @@ type DocumentIDRequest struct {
 	ID int64 `json:"id,string"`
 }
 
-// DocumentSearch 是文档库筛选条件。
+// DocumentSearch 是文档库筛选条件。FolderID 为空时不按文件夹过滤。
 type DocumentSearch struct {
 	Title    string `json:"title"`
 	Kind     string `json:"kind"`
+	FolderID *int64 `json:"folder_id,string,omitempty"`
 	Sort     string `json:"sort"`
 	Order    string `json:"order"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
+}
+
+// DocumentMoveRequest 把文档放进文件夹，或移回根目录。
+type DocumentMoveRequest struct {
+	ID       int64 `json:"id,string"`
+	Revision int64 `json:"revision"`
+	FolderID int64 `json:"folder_id,string,omitempty"`
+}
+
+// FolderCreateRequest 在某个位置新建文件夹。parent_id 为 0 表示根目录。
+type FolderCreateRequest struct {
+	ParentID int64  `json:"parent_id,string,omitempty"`
+	Name     string `json:"name"`
+}
+
+// FolderUpdateRequest 重命名文件夹。
+type FolderUpdateRequest struct {
+	ID   int64  `json:"id,string"`
+	Name string `json:"name"`
+}
+
+// FolderIDRequest 用于文件夹详情和删除。
+type FolderIDRequest struct {
+	ID int64 `json:"id,string"`
+}
+
+// FolderSearch 列出某个目录下的文件夹。ParentID 为空时列出当前用户的全部文件夹。
+type FolderSearch struct {
+	ParentID *int64 `json:"parent_id,string,omitempty"`
+	Name     string `json:"name"`
 	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`
 }
@@ -75,6 +109,7 @@ type DocumentRestoreRequest struct {
 // DocumentSimple 是文档库列表项。
 type DocumentSimple struct {
 	ID        int64     `json:"id,string"`
+	FolderID  int64     `json:"folder_id,string,omitempty"`
 	Kind      string    `json:"kind"`
 	Title     string    `json:"title"`
 	Revision  int64     `json:"revision"`
@@ -85,6 +120,7 @@ type DocumentSimple struct {
 // DocumentResponse 是文档详情。Content 是已规范化的 JSON。
 type DocumentResponse struct {
 	ID        int64           `json:"id,string"`
+	FolderID  int64           `json:"folder_id,string,omitempty"`
 	Kind      string          `json:"kind"`
 	Title     string          `json:"title"`
 	Revision  int64           `json:"revision"`
@@ -93,6 +129,20 @@ type DocumentResponse struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// FolderSimple 是首页上的文件夹。
+type FolderSimple struct {
+	ID        int64     `json:"id,string"`
+	ParentID  int64     `json:"parent_id,string,omitempty"`
+	Name      string    `json:"name"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// FolderDetail 带有从根目录到上一级的路径。
+type FolderDetail struct {
+	FolderSimple
+	Ancestors []FolderSimple `json:"ancestors"`
 }
 
 // DocumentSaveResponse 说明这次保存有没有产生新版本。
@@ -114,6 +164,7 @@ type DocumentVersionSimple struct {
 
 // DocumentImportRequest 用文件内容创建一份云端文档。
 type DocumentImportRequest struct {
+	FolderID      int64  `json:"folder_id,string,omitempty"`
 	Filename      string `json:"filename"`
 	ContentBase64 string `json:"content_base64"`
 }

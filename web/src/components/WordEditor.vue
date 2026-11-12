@@ -8,6 +8,7 @@ import {
   collapseBackward,
   findHits,
   listMarker,
+  maxWordBlocks,
   mergeRuns,
   newId,
   plainText,
@@ -454,7 +455,7 @@ function onPaste(index, event) {
 }
 function replaceWithSegments(index, segments, caret = null) {
   const block = props.modelValue.blocks[index]
-  const room = 400 - props.modelValue.blocks.length + 1
+  const room = maxWordBlocks - props.modelValue.blocks.length + 1
   const kept = segments.slice(0, Math.max(1, room))
   if (kept.length < segments.length) {
     const extra = segments.slice(kept.length).map((runs) => plainText(runs)).filter(Boolean).join(' ')
@@ -505,7 +506,7 @@ function insertLines(index, lines) {
   replaceWithSegments(index, [first.length ? first : emptyRuns(), ...middle, last.length ? last : emptyRuns()], lines[lines.length - 1].length)
 }
 function splitBlock(index) {
-  if (props.modelValue.blocks.length >= 400) return
+  if (props.modelValue.blocks.length >= maxWordBlocks) return
   const element = elements.value[index]
   const block = props.modelValue.blocks[index]
   if (!block || block.type === 'break') return
@@ -642,7 +643,7 @@ function onKey(index, event) {
   }
 }
 function insertBreak() {
-  if (props.readonly || props.modelValue.blocks.length >= 400) return
+  if (props.readonly || props.modelValue.blocks.length >= maxWordBlocks) return
   checkpoint()
   props.modelValue.blocks.splice(active.value + 1, 0, { id: newId(), type: 'break', align: 'left', runs: emptyRuns() })
   touch()

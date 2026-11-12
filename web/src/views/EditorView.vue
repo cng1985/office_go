@@ -29,6 +29,7 @@ const versionsLoading = ref(false)
 const preview = ref(null)
 
 const dirty = computed(() => doc.value && JSON.stringify({ title: doc.value.title, content: draft.value }) !== saved.value)
+const libraryHome = computed(() => (doc.value?.folder_id ? { path: '/', query: { folder: String(doc.value.folder_id) } } : '/'))
 const excelPreview = computed(() => (preview.value && doc.value?.kind === 'excel' ? normalizeWorkbook(preview.value.content) : null))
 
 function asDraft(kind, content) {
@@ -180,7 +181,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   <p class="error" v-if="!doc && error" style="margin: 24px">{{ error }}</p>
   <div class="editor-shell" :class="{ 'word-mode': doc.kind === 'word', 'excel-mode': doc.kind === 'excel', 'ppt-mode': doc.kind === 'ppt' }" v-if="doc && draft">
     <header class="editor-bar" v-if="doc.kind !== 'excel' && doc.kind !== 'ppt'">
-      <router-link v-if="doc.kind === 'word'" class="word-back" to="/" aria-label="返回">‹</router-link>
+      <router-link v-if="doc.kind === 'word'" class="word-back" :to="libraryHome" aria-label="返回">‹</router-link>
       <router-link v-else class="brand" to="/"><span class="brand-mark">笺</span></router-link>
       <span v-if="doc.kind === 'word'" class="word-doc-icon" aria-hidden="true">W</span>
       <input class="title-input" data-testid="doc-title" v-model="doc.title" :disabled="!!preview" />
@@ -207,6 +208,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           :title="doc.title"
           :status="status"
           :pending="pending"
+          :home-to="libraryHome"
           @update:title="doc.title = $event"
           @save="save"
           @versions="drawer = !drawer"
@@ -226,6 +228,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           :title="doc.title"
           :status="status"
           :pending="pending"
+          :home-to="libraryHome"
           @update:title="doc.title = $event"
           @save="save"
           @versions="drawer = !drawer"

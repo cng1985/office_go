@@ -43,3 +43,27 @@ export function getVersion(body) {
 export function restoreVersion(body) {
   return post('/api/document/version/restore', body)
 }
+
+export function moveDocument(body) {
+  return post('/api/document/move', body)
+}
+
+export function createFolder(body) {
+  return post('/api/document/folder/create', body)
+}
+
+export function updateFolder(body) {
+  return post('/api/document/folder/update', body)
+}
+
+export function deleteFolder(id) {
+  return post('/api/document/folder/delete', { id })
+}
+
+export function getFolder(id) {
+  return post('/api/document/folder/one', { id })
+}
+
+export function searchFolders(body) {
+  return postPage('/api/document/folder/search', body)
+}
