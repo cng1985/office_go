@@ -290,7 +290,7 @@ func (r *Resource) SearchFolders(ctx context.Context, search *FolderSearch) (res
 		return zero, apperrors.BadRequest(400, "请求格式不正确")
 	}
 	search.Name = trimSpace(search.Name)
-	if utf8.RuneCountInString(search.Name) > 80 {
+	if utf8.RuneCountInString(search.Name) > 100 {
 		return zero, apperrors.BadRequest(400, "搜索词过长")
 	}
 	if search.ParentID != nil && *search.ParentID < 0 {
