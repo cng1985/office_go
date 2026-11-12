@@ -540,3 +540,67 @@ func TestPDFRejectsBadImageBlock(t *testing.T) {
 		t.Fatal("expected image field rejected")
 	}
 }
+
+func TestPDFKeepsRotatedImage(t *testing.T) {
+	jpegBytes := tinyJPEG(t)
+	content := "0 100 -100 0 200 200 cm /Im0 Do"
+	imageObj := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream", len(jpegBytes), jpegBytes)
+	page := "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>"
+	_, _, got, err := ImportFile("旋转.pdf", assemblePDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+		page,
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		imageObj,
+	}, ""))
+	if err != nil || !bytes.Contains(got, []byte(`"type":"image"`)) {
+		t.Fatal(err, string(got))
+	}
+}
+
+func TestCMYKJPEGExportsAsRGB(t *testing.T) {
+	raw, err := base64.StdEncoding.DecodeString(cmykJPEGFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.ColorModel != color.CMYKModel {
+		t.Fatal(err, cfg.ColorModel)
+	}
+	fitted := fitJPEG(raw)
+	fittedCfg, err := jpeg.DecodeConfig(bytes.NewReader(fitted))
+	if err != nil || fittedCfg.ColorModel == color.CMYKModel {
+		t.Fatal(err, fittedCfg.ColorModel)
+	}
+	block := wordBlock{
+		ID: "b1", Type: "image", Align: "left",
+		Runs:  []wordRun{{}},
+		Image: jpegDataPrefix + base64.StdEncoding.EncodeToString(raw),
+	}
+	content, err := json.Marshal(wordContent{Blocks: []wordBlock{block}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := Canonical(KindPDF, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := exportPDF(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(body, []byte("/DeviceCMYK")) || !bytes.Contains(body, []byte("/ColorSpace /DeviceRGB")) {
+		t.Fatal("exported color space")
+	}
+	at := bytes.Index(body, []byte{0xff, 0xd8})
+	if at < 0 {
+		t.Fatal("missing jpeg")
+	}
+	exported, err := jpeg.DecodeConfig(bytes.NewReader(body[at:]))
+	if err != nil || exported.ColorModel == color.CMYKModel {
+		t.Fatal(err, exported.ColorModel)
+	}
+}
+
+// 2×2 CMYK JPEG produced by Pillow. Go's encoder cannot write this color model.
+const cmykJPEGFixture = "/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/8AAFAgAAgACBEMRAE0RAFkRAEsRAP/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAA4EQwBNAFkASwAAPwD9U6/Kqvyqr9U6/9k="

@@ -47,7 +47,8 @@ func fitJPEG(raw []byte) []byte {
 	if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 8000 || cfg.Height > 8000 {
 		return nil
 	}
-	if len(raw) <= maxPDFImageBytes {
+	// CMYK JPEG 的字节不能配 /DeviceRGB。先解码再写成 RGB，浏览器和导出才是同一张图。
+	if cfg.ColorModel != color.CMYKModel && len(raw) <= maxPDFImageBytes {
 		return append([]byte(nil), raw...)
 	}
 	img, err := jpeg.Decode(bytes.NewReader(raw))
@@ -326,12 +327,13 @@ func (in *pdfInterp) placeImage(obj pdfObj) error {
 	}
 	x0, y0 := in.ctm.pt(0, 0)
 	x1, y1 := in.ctm.pt(1, 0)
-	_, y2 := in.ctm.pt(0, 1)
+	x2, y2 := in.ctm.pt(0, 1)
+	_, y3 := in.ctm.pt(1, 1)
 	placed := pdfPlacedImage{
 		x:    x0,
-		y:    math.Max(y0, y2),
+		y:    math.Max(math.Max(y0, y1), math.Max(y2, y3)),
 		w:    math.Hypot(x1-x0, y1-y0),
-		h:    math.Abs(y2 - y0),
+		h:    math.Hypot(x2-x0, y2-y0),
 		data: obj.image,
 	}
 	if placed.w < 2 || placed.h < 2 {

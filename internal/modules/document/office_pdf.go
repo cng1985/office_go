@@ -152,6 +152,10 @@ func (pen *pdfPen) drawImage(block wordBlock) {
 	if !ok {
 		return
 	}
+	data = fitJPEG(data)
+	if len(data) == 0 {
+		return
+	}
 	width, height, _, ok := jpegInfo(data)
 	if !ok || width < 1 || height < 1 {
 		return
