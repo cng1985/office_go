@@ -607,6 +607,9 @@ func applyInputs(order [][2]int, cells map[[2]int]sheetCell, shared []string) er
 			input, err = cellInput("", cell.formulaText, "", "", nil)
 		default:
 			input, err = cellInput(cell.kind, "", cell.cached, cell.inlineText, shared)
+			if cell.kind == "inlineStr" || cell.kind == "s" {
+				cell.Format = "text"
+			}
 		}
 		if err != nil {
 			return err
@@ -647,13 +650,13 @@ func shiftFormula(formula string, deltaRow, deltaCol int) string {
 		}
 		if ref, end, ok := parseFormulaRef(source, i); ok {
 			next := ref
-			if !ref.absRow {
+			if ref.hasRow && !ref.absRow {
 				next.row += deltaRow
 			}
-			if !ref.absCol {
+			if ref.hasCol && !ref.absCol {
 				next.col += deltaCol
 			}
-			if next.row < 1 || next.col < 1 || next.row > 120 || next.col > 30 {
+			if formulaRefBroken(next) {
 				out.WriteString("#REF!")
 			} else {
 				out.WriteString(formatFormulaRef(next))
@@ -672,12 +675,26 @@ type formulaRef struct {
 	row    int
 	absCol bool
 	absRow bool
+	hasCol bool
+	hasRow bool
 }
 
 func parseFormulaRef(source string, index int) (formulaRef, int, bool) {
 	if index > 0 && isFormulaName(source[index-1]) {
 		return formulaRef{}, 0, false
 	}
+	if ref, end, ok := parseCellOrColumn(source, index); ok && validFormulaRef(ref) {
+		if ref.hasRow || isRangeEdge(source, index, end) {
+			return ref, end, true
+		}
+	}
+	if ref, end, ok := parseRowOnly(source, index); ok && validFormulaRef(ref) && isRangeEdge(source, index, end) {
+		return ref, end, true
+	}
+	return formulaRef{}, 0, false
+}
+
+func parseCellOrColumn(source string, index int) (formulaRef, int, bool) {
 	i := index
 	absCol := false
 	if i < len(source) && source[i] == '$' {
@@ -691,40 +708,101 @@ func parseFormulaRef(source string, index int) (formulaRef, int, bool) {
 	if i == colStart {
 		return formulaRef{}, 0, false
 	}
+	col := colIndex(source[colStart:i])
+	ref := formulaRef{col: col, absCol: absCol, hasCol: true}
+	if i < len(source) && source[i] == '$' {
+		j := i + 1
+		row, end, ok := parseRowNumber(source, j)
+		if !ok {
+			return formulaRef{}, 0, false
+		}
+		ref.row = row
+		ref.absRow = true
+		ref.hasRow = true
+		return ref, end, true
+	}
+	if row, end, ok := parseRowNumber(source, i); ok {
+		ref.row = row
+		ref.hasRow = true
+		return ref, end, true
+	}
+	return ref, i, true
+}
+
+func parseRowOnly(source string, index int) (formulaRef, int, bool) {
+	i := index
 	absRow := false
 	if i < len(source) && source[i] == '$' {
 		absRow = true
 		i++
 	}
-	rowStart := i
-	if rowStart >= len(source) || source[rowStart] < '1' || source[rowStart] > '9' {
+	row, end, ok := parseRowNumber(source, i)
+	if !ok {
 		return formulaRef{}, 0, false
 	}
-	i++
+	return formulaRef{row: row, absRow: absRow, hasRow: true}, end, true
+}
+
+func parseRowNumber(source string, index int) (int, int, bool) {
+	if index >= len(source) || source[index] < '1' || source[index] > '9' {
+		return 0, 0, false
+	}
+	i := index + 1
 	for i < len(source) && source[i] >= '0' && source[i] <= '9' {
 		i++
 	}
-	col := colIndex(source[colStart:rowStart])
-	if absRow {
-		col = colIndex(source[colStart : rowStart-1])
+	row, err := strconv.Atoi(source[index:i])
+	if err != nil {
+		return 0, 0, false
 	}
-	row, err := strconv.Atoi(source[rowStart:i])
-	if err != nil || col < 1 || col > 30 || row < 1 || row > 120 {
-		return formulaRef{}, 0, false
+	return row, i, true
+}
+
+func isRangeEdge(source string, start, end int) bool {
+	if end < len(source) && source[end] == ':' {
+		return true
 	}
-	return formulaRef{col: col, row: row, absCol: absCol, absRow: absRow}, i, true
+	return start > 0 && source[start-1] == ':'
+}
+
+func validFormulaRef(ref formulaRef) bool {
+	if !ref.hasCol && !ref.hasRow {
+		return false
+	}
+	if ref.hasCol && (ref.col < 1 || ref.col > 30) {
+		return false
+	}
+	if ref.hasRow && (ref.row < 1 || ref.row > 120) {
+		return false
+	}
+	return true
+}
+
+func formulaRefBroken(ref formulaRef) bool {
+	if ref.hasCol && (ref.col < 1 || ref.col > 30) {
+		return true
+	}
+	if ref.hasRow && (ref.row < 1 || ref.row > 120) {
+		return true
+	}
+	return false
 }
 
 func formatFormulaRef(ref formulaRef) string {
-	col := ""
-	row := ""
-	if ref.absCol {
-		col = "$"
+	var out strings.Builder
+	if ref.hasCol {
+		if ref.absCol {
+			out.WriteByte('$')
+		}
+		out.WriteString(colName(ref.col))
 	}
-	if ref.absRow {
-		row = "$"
+	if ref.hasRow {
+		if ref.absRow {
+			out.WriteByte('$')
+		}
+		out.WriteString(strconv.Itoa(ref.row))
 	}
-	return col + colName(ref.col) + row + strconv.Itoa(ref.row)
+	return out.String()
 }
 
 func sheetToken(source string, index int) (string, int, bool) {
