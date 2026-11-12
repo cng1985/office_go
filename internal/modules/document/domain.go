@@ -1,5 +1,5 @@
-// Package document 管理云端文稿、表格、演示及其版本。
-// 三种文件是同一文档聚合的类型，版本历史属于该聚合，不单独拆模块。
+// Package document 管理云端文稿、表格、演示、PDF 及其版本。
+// 这些文件是同一文档聚合的类型，版本历史属于该聚合，不单独拆模块。
 package document
 
 import (
@@ -11,6 +11,7 @@ const (
 	KindWord  = "word"
 	KindExcel = "excel"
 	KindPPT   = "ppt"
+	KindPDF   = "pdf"
 )
 
 // DocumentCreateRequest 创建空文档。客户端不能指定主键和正文。

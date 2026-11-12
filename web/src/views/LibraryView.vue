@@ -58,7 +58,7 @@ const emptyTitle = computed(() => {
 const emptyText = computed(() => {
   if (searching.value) return '换一个词，或清空搜索看看当前文件夹。'
   if (currentFolder.value) return '可以在这里新建文档，或把已有文档移动进来。'
-  return '新建一份，或上传 docx、xlsx、pptx、txt、csv。'
+  return '新建一份，或上传 docx、xlsx、pptx、pdf、txt、csv。'
 })
 
 function readView() {
@@ -344,19 +344,23 @@ onMounted(() => {
           <KindMark kind="ppt" />
           演示
         </button>
+        <button type="button" class="create-tile" data-testid="create-pdf" :disabled="pending" @click="create('pdf')">
+          <KindMark kind="pdf" />
+          PDF
+        </button>
         <button type="button" class="create-tile" data-testid="create-folder" :disabled="pending" @click="makingFolder = true; folderName = ''">
           <span class="mark folder-mark">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l1.5-2h9v11.5a1.5 1.5 0 0 1-1.5 1.5h-15a1.5 1.5 0 0 1-1.5-1.5v-8a1.5 1.5 0 0 1 1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
           </span>
           文件夹
         </button>
-        <button type="button" class="create-tile" data-testid="upload-button" :disabled="pending" title="上传 docx、xlsx、pptx、txt、csv 或 json" @click="pickFile">
+        <button type="button" class="create-tile" data-testid="upload-button" :disabled="pending" title="上传 docx、xlsx、pptx、pdf、txt、csv 或 json" @click="pickFile">
           <span class="mark upload-mark">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V7M8.5 10.5 12 7l3.5 3.5M6 17.5h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </span>
           上传
         </button>
-        <input ref="fileInput" class="file-input" data-testid="upload-input" type="file" accept=".docx,.xlsx,.pptx,.txt,.csv,.json,text/plain,text/csv,application/json" @change="onUpload" />
+        <input ref="fileInput" class="file-input" data-testid="upload-input" type="file" accept=".docx,.xlsx,.pptx,.pdf,.txt,.csv,.json,text/plain,text/csv,application/pdf,application/json" @change="onUpload" />
       </div>
       <nav class="crumbs" data-testid="folder-crumbs" aria-label="文件夹路径">
         <button type="button" @click="openFolder('')">我的文档</button>
@@ -376,6 +380,7 @@ onMounted(() => {
           <button type="button" :aria-pressed="kind === 'word'" @click="kind = 'word'">文稿</button>
           <button type="button" :aria-pressed="kind === 'excel'" @click="kind = 'excel'">表格</button>
           <button type="button" :aria-pressed="kind === 'ppt'" @click="kind = 'ppt'">演示</button>
+          <button type="button" data-testid="filter-pdf" :aria-pressed="kind === 'pdf'" @click="kind = 'pdf'">PDF</button>
         </div>
         <div class="view-switch" role="group" aria-label="显示方式">
           <button type="button" data-testid="view-list" :aria-pressed="view === 'list'" @click="setView('list')">

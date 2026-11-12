@@ -129,7 +129,7 @@ func Canonical(kind string, raw []byte) ([]byte, error) {
 		return nil, apperrors.TooLarge(413, "文档内容超过 1MB 限制")
 	}
 	switch kind {
-	case KindWord:
+	case KindWord, KindPDF:
 		var content wordContent
 		if err := decodeContent(raw, &content); err != nil {
 			return nil, err
@@ -164,7 +164,7 @@ func Canonical(kind string, raw []byte) ([]byte, error) {
 // Blank 返回新建文档的初始正文。
 func Blank(kind string) ([]byte, error) {
 	switch kind {
-	case KindWord:
+	case KindWord, KindPDF:
 		return Canonical(kind, []byte(`{"blocks":[{"id":"b1","type":"paragraph","align":"left","runs":[{"text":"","bold":false,"italic":false,"underline":false}]}]}`))
 	case KindExcel:
 		return Canonical(kind, []byte(`{"sheets":[{"name":"工作表1","row_count":50,"col_count":26,"cells":[]}]}`))

@@ -29,6 +29,7 @@ const versionsLoading = ref(false)
 const preview = ref(null)
 
 const dirty = computed(() => doc.value && JSON.stringify({ title: doc.value.title, content: draft.value }) !== saved.value)
+const pageLike = computed(() => doc.value?.kind === 'word' || doc.value?.kind === 'pdf')
 const libraryHome = computed(() => (doc.value?.folder_id ? { path: '/', query: { folder: String(doc.value.folder_id) } } : '/'))
 const excelPreview = computed(() => (preview.value && doc.value?.kind === 'excel' ? normalizeWorkbook(preview.value.content) : null))
 
@@ -179,16 +180,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 <template>
   <p class="error" v-if="!doc && error" style="margin: 24px">{{ error }}</p>
-  <div class="editor-shell" :class="{ 'word-mode': doc.kind === 'word', 'excel-mode': doc.kind === 'excel', 'ppt-mode': doc.kind === 'ppt' }" v-if="doc && draft">
+  <div class="editor-shell" :class="{ 'word-mode': pageLike, 'excel-mode': doc.kind === 'excel', 'ppt-mode': doc.kind === 'ppt' }" v-if="doc && draft">
     <header class="editor-bar" v-if="doc.kind !== 'excel' && doc.kind !== 'ppt'">
-      <router-link v-if="doc.kind === 'word'" class="word-back" :to="libraryHome" aria-label="返回">‹</router-link>
+      <router-link v-if="pageLike" class="word-back" :to="libraryHome" aria-label="返回">‹</router-link>
       <router-link v-else class="brand" to="/"><span class="brand-mark">笺</span></router-link>
-      <span v-if="doc.kind === 'word'" class="word-doc-icon" aria-hidden="true">W</span>
+      <span v-if="pageLike" class="word-doc-icon" :class="{ pdf: doc.kind === 'pdf' }" data-testid="doc-kind-mark" aria-hidden="true">{{ doc.kind === 'pdf' ? 'P' : 'W' }}</span>
       <input class="title-input" data-testid="doc-title" v-model="doc.title" :disabled="!!preview" />
-      <input v-if="doc.kind !== 'word'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
+      <input v-if="!pageLike" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
       <span class="status" data-testid="save-status">{{ status }}</span>
-      <button class="primary" :class="{ 'word-save': doc.kind === 'word' }" type="button" data-testid="save-button" :disabled="pending || !!preview" @click="save">{{ doc.kind === 'word' ? '保存' : '保存到云端' }}</button>
-      <button class="ghost" type="button" data-testid="version-button" @click="drawer = !drawer">{{ doc.kind === 'word' ? '历史' : '版本' }}</button>
+      <button class="primary" :class="{ 'word-save': pageLike }" type="button" data-testid="save-button" :disabled="pending || !!preview" @click="save">{{ pageLike ? '保存' : '保存到云端' }}</button>
+      <button class="ghost" type="button" data-testid="version-button" @click="drawer = !drawer">{{ pageLike ? '历史' : '版本' }}</button>
     </header>
     <p class="error" v-if="error" style="margin: 12px 28px">{{ error }}</p>
     <div class="editor-body" :class="{ closed: !drawer }">
@@ -200,8 +201,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             <button class="primary" type="button" data-testid="restore-button" @click="restore">恢复此版本</button>
           </span>
         </div>
-        <WordEditor v-if="doc.kind === 'word' && !preview" v-model="draft" @save="save" @versions="drawer = !drawer" />
-        <WordEditor v-else-if="doc.kind === 'word'" :model-value="preview.content" readonly />
+        <WordEditor v-if="pageLike && !preview" v-model="draft" @save="save" @versions="drawer = !drawer" />
+        <WordEditor v-else-if="pageLike" :model-value="preview.content" readonly />
         <ExcelEditor
           v-else-if="doc.kind === 'excel' && !preview"
           v-model="draft"
@@ -223,7 +224,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           @versions="drawer = !drawer"
         />
         <PptEditor
-          v-else-if="!preview"
+          v-else-if="doc.kind === 'ppt' && !preview"
           v-model="draft"
           :title="doc.title"
           :status="status"
@@ -234,7 +235,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           @versions="drawer = !drawer"
         />
         <PptEditor
-          v-else
+          v-else-if="doc.kind === 'ppt'"
           :model-value="preview.content"
           :title="doc.title"
           :status="status"
@@ -245,7 +246,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       </section>
       <aside class="drawer" v-if="drawer" data-testid="version-drawer">
         <h3>版本记录</h3>
-        <input v-if="doc.kind === 'word' || doc.kind === 'excel' || doc.kind === 'ppt'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
+        <input v-if="pageLike || doc.kind === 'excel' || doc.kind === 'ppt'" class="note-input" data-testid="version-note" v-model="note" placeholder="版本说明" />
         <p class="muted">恢复会新增一个版本，不会抹掉后来的历史。</p>
         <button
           v-for="item in versions"

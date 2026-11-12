@@ -9,7 +9,7 @@ import (
 )
 
 func validKind(kind string) bool {
-	return kind == KindWord || kind == KindExcel || kind == KindPPT
+	return kind == KindWord || kind == KindExcel || kind == KindPPT || kind == KindPDF
 }
 
 func normalizeFolderName(name string) (string, error) {

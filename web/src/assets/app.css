@@ -63,6 +63,7 @@ a { color: var(--cinnabar-dark); }
 .mark.word { background: #1a73e8; }
 .mark.excel { background: #188038; }
 .mark.ppt { background: #fbbc04; color: #fff; }
+.mark.pdf { background: #d93025; }
 .muted { color: var(--ink-soft); }
 .auth-screen .muted, .home .muted { color: #5f6368; }
 form { display: grid; gap: 14px; margin-top: 28px; }
@@ -278,6 +279,7 @@ input:focus, textarea:focus { border-color: var(--gold); }
 .word-back, .word-doc-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; color: #3c4043; text-decoration: none; font-size: 22px; }
 .word-back:hover { background: #f1f3f4; }
 .word-doc-icon { background: #1a73e8; color: white; border-radius: 6px; font-size: 14px; font-weight: 700; }
+.word-doc-icon.pdf { background: #d93025; }
 .word-save { background: #1a73e8 !important; border-radius: 18px !important; padding: 8px 18px !important; }
 .word-editor { height: 100%; min-height: 0; display: flex; flex-direction: column; background: #f8f9fa; }
 .word-menu { display: flex; gap: 2px; align-items: center; padding: 0 8px 2px; background: #fff; }
