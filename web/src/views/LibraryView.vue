@@ -232,12 +232,26 @@ function openFolder(id) {
   router.push({ name: 'library', query })
 }
 
+function restoredSpaces() {
+  const spaces = []
+  if (openIds.value['space:personal']) spaces.push('')
+  for (const team of teams.value) {
+    const id = String(team.id)
+    if (openIds.value[spaceStorageKey(id)]) spaces.push(id)
+  }
+  return spaces
+}
+
 async function loadTeams() {
   try {
     const result = await searchTeams({ page: 1, page_size: 200 })
     teams.value = result.data
   } catch {
     teams.value = []
+  }
+  for (const space of restoredSpaces()) {
+    if (space === teamId.value) continue
+    loadSpaceFolders(space)
   }
 }
 
