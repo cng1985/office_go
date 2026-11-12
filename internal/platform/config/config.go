@@ -244,8 +244,11 @@ func (c *Config) Validate() error {
 	if c.Server.ReadHeaderTimeout <= 0 || c.Server.IdleTimeout <= 0 || c.Server.ShutdownTimeout <= 0 || c.Server.RequestTimeout <= 0 || c.Server.SSETimeout <= 0 {
 		return fmt.Errorf("server 超时必须大于 0")
 	}
-	if c.Server.MaxHeaderBytes <= 0 || c.Server.MaxBodyBytes <= 0 {
-		return fmt.Errorf("server 报文限制必须大于 0")
+	if c.Server.MaxHeaderBytes <= 0 {
+		return fmt.Errorf("server.max_header_bytes 必须大于 0")
+	}
+	if c.Server.MaxBodyBytes < 0 {
+		return fmt.Errorf("server.max_body_bytes 不能为负数")
 	}
 	for _, proxy := range c.Server.TrustedProxies {
 		if ip := net.ParseIP(proxy); ip == nil {

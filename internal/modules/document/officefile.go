@@ -17,13 +17,11 @@ import (
 )
 
 const (
-	maxUploadBytes     = 1 << 20
-	maxZipEntries      = 200
-	maxZipUncompressed = 8 << 20
-	docxMediaType      = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-	xlsxMediaType      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-	pptxMediaType      = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-	officeXMLHeader    = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
+	maxZipEntries   = 200
+	docxMediaType   = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	xlsxMediaType   = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	pptxMediaType   = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	officeXMLHeader = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`
 )
 
 // OfficeFile 是导出后的办公文件。
@@ -247,9 +245,6 @@ func packZip(files map[string]string) ([]byte, error) {
 }
 
 func readZip(raw []byte) (map[string][]byte, error) {
-	if len(raw) > maxUploadBytes {
-		return nil, apperrors.TooLarge(413, "文件超过 1MB 限制")
-	}
 	reader, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		return nil, apperrors.BadRequest(400, "文件内容无法读取")
@@ -258,7 +253,6 @@ func readZip(raw []byte) (map[string][]byte, error) {
 		return nil, apperrors.BadRequest(400, "文件过大或内容过多")
 	}
 	files := make(map[string][]byte, len(reader.File))
-	total := 0
 	for _, file := range reader.File {
 		if file.FileInfo().IsDir() {
 			continue
@@ -267,22 +261,15 @@ func readZip(raw []byte) (map[string][]byte, error) {
 		if name == "." || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
 			return nil, apperrors.BadRequest(400, "文件内容无法读取")
 		}
-		if file.UncompressedSize64 > maxZipUncompressed {
-			return nil, apperrors.BadRequest(400, "文件过大或内容过多")
-		}
 		rc, err := file.Open()
 		if err != nil {
 			return nil, apperrors.BadRequest(400, "文件内容无法读取")
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, maxZipUncompressed+1))
+		data, err := io.ReadAll(rc)
 		_ = rc.Close()
 		if err != nil {
 			return nil, apperrors.BadRequest(400, "文件内容无法读取")
 		}
-		if len(data) > maxZipUncompressed || total+len(data) > maxZipUncompressed {
-			return nil, apperrors.BadRequest(400, "文件过大或内容过多")
-		}
-		total += len(data)
 		files[name] = data
 	}
 	return files, nil

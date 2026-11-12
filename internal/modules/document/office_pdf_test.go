@@ -68,7 +68,7 @@ func TestPDFRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if file.Filename != "合同.pdf" || file.MediaType != pdfMediaType || !bytes.HasPrefix(file.Body, []byte("%PDF")) || len(file.Body) > maxUploadBytes {
+	if file.Filename != "合同.pdf" || file.MediaType != pdfMediaType || !bytes.HasPrefix(file.Body, []byte("%PDF")) {
 		t.Fatalf("file %s %s %d", file.Filename, file.MediaType, len(file.Body))
 	}
 	kind, title, got, err := ImportFile(file.Filename, file.Body)
