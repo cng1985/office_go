@@ -61,6 +61,31 @@ func TestHTTPContract(t *testing.T) {
 	if unauth.Body["code"] != float64(401) {
 		t.Fatalf("unauth = %v", unauth.Body)
 	}
+	calUnauth := postJSON(t, engine, http.MethodPost, "/api/calendar/search", map[string]any{
+		"from": "2026-11-01T00:00:00Z", "to": "2026-12-01T00:00:00Z",
+		"start_on": "2026-11-01", "end_on": "2026-11-30",
+	}, "")
+	if calUnauth.Body["code"] != float64(401) {
+		t.Fatalf("calendar unauth = %v", calUnauth.Body)
+	}
+	createdEvent := postJSON(t, engine, http.MethodPost, "/api/calendar/create", map[string]any{
+		"title": "周会", "all_day": true, "start_on": "2026-11-12", "end_on": "2026-11-12",
+	}, register.Cookie)
+	eventData, _ := createdEvent.Body["data"].(map[string]any)
+	if createdEvent.Body["code"] != float64(200) || eventData["title"] != "周会" || eventData["start_on"] != "2026-11-12" || eventData["all_day"] != true {
+		t.Fatalf("calendar create = %v", createdEvent.Body)
+	}
+	if _, ok := eventData["id"].(string); !ok {
+		t.Fatalf("calendar id = %v", eventData["id"])
+	}
+	foundEvents := postJSON(t, engine, http.MethodPost, "/api/calendar/search", map[string]any{
+		"from": "2026-11-01T00:00:00Z", "to": "2026-12-01T00:00:00Z",
+		"start_on": "2026-11-01", "end_on": "2026-11-30",
+	}, register.Cookie)
+	events, _ := foundEvents.Body["data"].(map[string]any)["events"].([]any)
+	if foundEvents.Body["code"] != float64(200) || len(events) != 1 {
+		t.Fatalf("calendar search = %v", foundEvents.Body)
+	}
 	live := getRaw(engine, "/health/live")
 	if live.Code != 200 {
 		t.Fatalf("live = %d", live.Code)

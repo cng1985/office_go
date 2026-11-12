@@ -5,6 +5,7 @@ import EditorView from '../views/EditorView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import AccountView from '../views/AccountView.vue'
+import CalendarView from '../views/CalendarView.vue'
 import TeamsView from '../views/TeamsView.vue'
 
 const router = createRouter({
@@ -14,6 +15,7 @@ const router = createRouter({
     { path: '/register', name: 'register', component: RegisterView, meta: { public: true } },
     { path: '/', name: 'library', component: LibraryView },
     { path: '/account', name: 'account', component: AccountView },
+    { path: '/calendar', name: 'calendar', component: CalendarView },
     { path: '/teams', name: 'teams', component: TeamsView },
     { path: '/teams/:id', name: 'team', component: TeamsView },
     { path: '/team/:id', redirect: (to) => ({ name: 'team', params: { id: to.params.id } }) },
