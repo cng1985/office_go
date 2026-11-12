@@ -40,6 +40,7 @@ async function submit() {
         <span class="mark ppt">
           <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="10" rx="1.2" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M9 19h6M12 16v3" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
         </span>
+        <span class="mark pdf">P</span>
       </div>
       <h1>注册</h1>
       <p class="muted">用户名会按小写保存，密码至少 8 个字符。注册后进入文档。</p>

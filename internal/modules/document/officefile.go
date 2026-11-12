@@ -33,7 +33,7 @@ type OfficeFile struct {
 	Body      []byte
 }
 
-// ExportFile 把当前正文写成 docx、xlsx 或 pptx。
+// ExportFile 把当前正文写成 docx、xlsx、pptx 或 pdf。
 func ExportFile(kind, title string, content []byte) (OfficeFile, error) {
 	canonical, err := Canonical(kind, content)
 	if err != nil {
@@ -58,6 +58,12 @@ func ExportFile(kind, title string, content []byte) (OfficeFile, error) {
 			return OfficeFile{}, err
 		}
 		return OfficeFile{Filename: safeFilename(title, ".pptx"), MediaType: pptxMediaType, Body: body}, nil
+	case KindPDF:
+		body, err := exportPDF(canonical)
+		if err != nil {
+			return OfficeFile{}, err
+		}
+		return OfficeFile{Filename: safeFilename(title, ".pdf"), MediaType: pdfMediaType, Body: body}, nil
 	default:
 		return OfficeFile{}, apperrors.BadRequest(400, "不支持的文档类型")
 	}
@@ -82,8 +88,10 @@ func ImportFile(filename string, body []byte) (string, string, []byte, error) {
 		return importXlsx(filename, body)
 	case ".pptx":
 		return importPptx(filename, body)
+	case ".pdf":
+		return importPDF(filename, body)
 	default:
-		return "", "", nil, apperrors.BadRequest(400, "请上传 docx、xlsx、pptx、txt、csv 或 json 文件")
+		return "", "", nil, apperrors.BadRequest(400, "请上传 docx、xlsx、pptx、pdf、txt、csv 或 json 文件")
 	}
 }
 
@@ -173,7 +181,7 @@ func titleFromFilename(name string) string {
 	base := path.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
 	ext := strings.ToLower(path.Ext(base))
 	switch ext {
-	case ".docx", ".xlsx", ".pptx", ".txt", ".csv", ".json", ".doc", ".xls", ".ppt":
+	case ".docx", ".xlsx", ".pptx", ".pdf", ".txt", ".csv", ".json", ".doc", ".xls", ".ppt":
 		base = strings.TrimSpace(base[:len(base)-len(ext)])
 	}
 	base = strings.Trim(base, ". ")
