@@ -47,6 +47,10 @@ export function timeKey(date) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
+export function clockMinutes(date) {
+  return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60 + date.getMilliseconds() / 60000
+}
+
 export function minutesLabel(total) {
   const minutes = ((Math.floor(total) % 1440) + 1440) % 1440
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
@@ -74,6 +78,24 @@ export function eventsOn(events, key) {
     if (a.all_day !== b.all_day) return a.all_day ? -1 : 1
     return String(a.starts_at).localeCompare(String(b.starts_at)) || String(a.id).localeCompare(String(b.id))
   })
+}
+
+export function timedBlocks(events, key) {
+  const day = parseKey(key)
+  const next = addDays(day, 1)
+  const items = []
+  for (const event of events || []) {
+    if (!event || event.all_day) continue
+    const start = new Date(event.starts_at)
+    const end = new Date(event.ends_at)
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= next || end <= day) continue
+    items.push({
+      event,
+      start: start <= day ? 0 : clockMinutes(start),
+      end: end >= next ? 1440 : clockMinutes(end),
+    })
+  }
+  return placeTimed(items)
 }
 
 export function placeTimed(events) {

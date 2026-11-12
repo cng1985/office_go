@@ -13,9 +13,9 @@ import {
   minutesLabel,
   monthWeeks,
   parseKey,
-  placeTimed,
   startOfWeek,
   timeKey,
+  timedBlocks,
   toISO,
 } from '../editors/calendar'
 import { useSessionStore } from '../stores/session'
@@ -217,21 +217,7 @@ function dayEvents(key) {
 }
 
 function timedOn(key) {
-  const origin = parseKey(key).getTime()
-  const next = addDays(parseKey(key), 1).getTime()
-  const items = []
-  for (const event of events.value) {
-    if (event.all_day) continue
-    const start = new Date(event.starts_at).getTime()
-    const end = new Date(event.ends_at).getTime()
-    if (end <= origin || start >= next) continue
-    items.push({
-      event,
-      start: Math.max(0, (start - origin) / 60000),
-      end: Math.min(1440, (end - origin) / 60000),
-    })
-  }
-  return placeTimed(items)
+  return timedBlocks(events.value, key)
 }
 
 function allDayOn(key) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { coversDay, dateKey, eventsOn, monthWeeks, parseKey, placeTimed, startOfWeek, timeKey, toISO } from './calendar.js'
+import { coversDay, dateKey, eventsOn, monthWeeks, parseKey, placeTimed, startOfWeek, timedBlocks, timeKey, toISO } from './calendar.js'
 
 test('month grid starts on Monday and keeps six weeks', () => {
   const weeks = monthWeeks(2026, 10)
@@ -41,6 +41,41 @@ test('all-day and timed events land on the calendar days they cover', () => {
   const back = new Date(toISO('2026-11-12', '10:30'))
   assert.equal(dateKey(back), '2026-11-12')
   assert.equal(timeKey(back), '10:30')
+})
+
+test('timed blocks follow the local clock on daylight saving days', () => {
+  const morning = timedBlocks([{
+    id: 'morning',
+    all_day: false,
+    starts_at: new Date(2026, 2, 8, 10, 0).toISOString(),
+    ends_at: new Date(2026, 2, 8, 11, 0).toISOString(),
+  }], '2026-03-08')
+  assert.equal(morning.length, 1)
+  assert.equal(morning[0].start, 10 * 60)
+  assert.equal(morning[0].end, 11 * 60)
+
+  const late = timedBlocks([{
+    id: 'late',
+    all_day: false,
+    starts_at: new Date(2026, 10, 1, 23, 0).toISOString(),
+    ends_at: new Date(2026, 10, 1, 23, 30).toISOString(),
+  }], '2026-11-01')
+  assert.equal(late.length, 1)
+  assert.equal(late[0].start, 23 * 60)
+  assert.equal(late[0].end, 23 * 60 + 30)
+
+  const overnight = {
+    id: 'night',
+    all_day: false,
+    starts_at: new Date(2026, 10, 12, 22, 0).toISOString(),
+    ends_at: new Date(2026, 10, 13, 1, 30).toISOString(),
+  }
+  const first = timedBlocks([overnight], '2026-11-12')
+  const second = timedBlocks([overnight], '2026-11-13')
+  assert.equal(first[0].start, 22 * 60)
+  assert.equal(first[0].end, 1440)
+  assert.equal(second[0].start, 0)
+  assert.equal(second[0].end, 90)
 })
 
 test('overlapping timed events share a column group', () => {
