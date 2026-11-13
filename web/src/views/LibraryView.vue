@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   createDocument,
@@ -17,6 +17,7 @@ import {
 } from '../api/document'
 import KindMark from '../components/KindMark.vue'
 import { KINDS, formatTime } from '../editors/kinds'
+import { encodeBase64, formatBytes, isUploadCancel, uploadPercent } from '../editors/upload'
 import { searchTeams } from '../api/team'
 import { useSessionStore } from '../stores/session'
 
@@ -42,7 +43,10 @@ const moving = ref(null)
 const moveTarget = ref('0')
 const view = ref('list')
 const fileInput = ref(null)
+const upload = ref(null)
 const openIds = ref({})
+let uploadToken = 0
+let uploadAbort = null
 const viewKey = 'yunjian-library-view'
 const treeKey = 'yunjian-folder-tree'
 
@@ -329,31 +333,82 @@ async function onUpload(event) {
   await sendFile(file)
 }
 
+function uploadLabel(item) {
+  if (!item) return ''
+  if (item.phase === 'error') return item.message || '上传失败'
+  if (item.phase === 'done') return '上传完成'
+  if (item.phase === 'import') return '正在导入'
+  if (item.phase === 'upload') return '正在上传'
+  if (item.phase === 'encode') return '正在准备'
+  return '正在读取'
+}
+
+function cancelUpload() {
+  uploadToken += 1
+  uploadAbort?.abort()
+  uploadAbort = null
+  upload.value = null
+  pending.value = false
+}
+
+function dismissUpload() {
+  upload.value = null
+}
+
 async function sendFile(file) {
+  const token = ++uploadToken
+  uploadAbort?.abort()
+  const controller = new AbortController()
+  uploadAbort = controller
+  const size = file.size || 0
   pending.value = true
   error.value = ''
+  upload.value = { name: file.name, size, sent: 0, percent: 0, phase: 'read', message: '' }
+  const patch = (next) => {
+    if (token !== uploadToken) return
+    upload.value = { ...upload.value, ...next }
+  }
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    const body = withSpace({ filename: file.name, content_base64: encodeBase64(bytes) })
+    if (token !== uploadToken) return
+    const content = await encodeBase64(bytes, (done) => {
+      patch({
+        phase: 'encode',
+        sent: done,
+        percent: uploadPercent('encode', size ? done / size : 1),
+      })
+    }, controller.signal)
+    if (token !== uploadToken) return
+    patch({ phase: 'upload', sent: 0, percent: uploadPercent('upload', 0) })
+    const body = withSpace({ filename: file.name, content_base64: content })
     if (folderId.value) body.folder_id = folderId.value
-    const result = await importDocument(body)
+    const result = await importDocument(body, {
+      signal: controller.signal,
+      onProgress: ({ loaded, total }) => {
+        const ratio = total ? loaded / total : 0
+        const phase = ratio >= 1 ? 'import' : 'upload'
+        patch({
+          phase,
+          sent: Math.min(size, Math.round(size * ratio)),
+          percent: uploadPercent(phase, ratio),
+        })
+      },
+    })
+    if (token !== uploadToken) return
+    patch({ phase: 'import', sent: size, percent: 99 })
     title.value = ''
     kind.value = result.data.kind || ''
     await load()
+    if (token !== uploadToken) return
+    patch({ phase: 'done', sent: size, percent: 100, message: '' })
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    if (token === uploadToken && upload.value?.phase === 'done') upload.value = null
   } catch (err) {
-    error.value = err.message
+    if (token !== uploadToken || isUploadCancel(err)) return
+    patch({ phase: 'error', message: err.message || '上传失败' })
   } finally {
-    pending.value = false
+    if (token === uploadToken) pending.value = false
   }
-}
-
-function encodeBase64(bytes) {
-  let binary = ''
-  const size = 0x8000
-  for (let index = 0; index < bytes.length; index += size) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + size))
-  }
-  return btoa(binary)
 }
 
 async function download(item) {
@@ -493,6 +548,10 @@ watch([kind, title, folderId, teamId], () => {
   clearTimeout(timer)
   timer = setTimeout(load, 250)
 })
+onUnmounted(() => {
+  uploadToken += 1
+  uploadAbort?.abort()
+})
 onMounted(() => {
   readView()
   readTree()
@@ -608,6 +667,39 @@ onMounted(() => {
       </nav>
       <p class="search-note" v-if="searching">正在搜索当前文档库</p>
       </div>
+      <div class="library-sticky">
+      <div
+        v-if="upload"
+        class="upload-card"
+        :class="{ 'is-done': upload.phase === 'done', 'is-error': upload.phase === 'error' }"
+        data-testid="upload-progress"
+      >
+        <div class="upload-head">
+          <span class="upload-badge" aria-hidden="true">
+            <svg v-if="upload.phase === 'done'" viewBox="0 0 24 24"><path d="M6 12.5 10 16.5 18 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg v-else-if="upload.phase === 'error'" viewBox="0 0 24 24"><path d="M12 7v6M12 17h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <svg v-else viewBox="0 0 24 24"><path d="M12 16V7M8.5 10.5 12 7l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="upload-name">{{ upload.name }}</span>
+          <strong class="upload-percent" data-testid="upload-percent">{{ upload.percent }}%</strong>
+        </div>
+        <div
+          class="upload-track"
+          role="progressbar"
+          :aria-valuenow="upload.percent"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-label="`${upload.name} ${uploadLabel(upload)}`"
+        >
+          <span class="upload-fill" :style="{ width: `${upload.percent}%` }"></span>
+        </div>
+        <div class="upload-foot">
+          <span data-testid="upload-status">{{ uploadLabel(upload) }}</span>
+          <span class="upload-size" v-if="upload.phase !== 'error'">{{ formatBytes(upload.sent) }} / {{ formatBytes(upload.size) }}</span>
+          <button v-if="upload.phase === 'error'" class="text-button" type="button" data-testid="upload-dismiss" @click="dismissUpload">关闭</button>
+          <button v-else-if="upload.phase !== 'done'" class="text-button" type="button" data-testid="upload-cancel" @click="cancelUpload">取消</button>
+        </div>
+      </div>
       <div class="library-bar">
         <div class="filters">
           <button type="button" :aria-pressed="kind === ''" @click="kind = ''">全部</button>
@@ -626,6 +718,7 @@ onMounted(() => {
             网格
           </button>
         </div>
+      </div>
       </div>
       <p class="error" v-if="error">{{ error }}</p>
       <div v-if="(folders.length || documents.length) && view === 'list'" class="doc-list" data-testid="library-view">

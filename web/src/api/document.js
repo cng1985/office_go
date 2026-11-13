@@ -1,4 +1,4 @@
-import { post, postPage } from './http'
+import { post, postPage, postWithProgress } from './http'
 
 export function createDocument(body) {
   return post('/api/document/create', body)
@@ -20,8 +20,8 @@ export function deleteDocument(id) {
   return post('/api/document/delete', { id })
 }
 
-export function importDocument(body) {
-  return post('/api/document/import', body)
+export function importDocument(body, options = {}) {
+  return postWithProgress('/api/document/import', body, options.onProgress, options.signal)
 }
 
 export function exportDocument(id) {
